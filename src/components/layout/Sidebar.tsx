@@ -11,7 +11,9 @@ import {
   Settings,
   Menu,
   X,
-  Scale
+  Scale,
+  Receipt,
+  Archive
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -24,6 +26,8 @@ const navigation = [
   { name: 'Calendario', href: '/calendario', icon: Calendar },
   { name: 'Documentos', href: '/documentos', icon: FileText },
   { name: 'Notas', href: '/notas', icon: StickyNote },
+  { name: 'Facturación', href: '/facturacion', icon: Receipt },
+  { name: 'Bóveda', href: '/boveda', icon: Archive },
   { name: 'IA Assistant', href: '/ai-assistant', icon: Bot },
   { name: 'Configuración', href: '/configuracion', icon: Settings },
 ]

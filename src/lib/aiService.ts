@@ -35,6 +35,7 @@ export interface DocumentContext {
   id: string
   nombre: string
   tipo: string
+  contenido?: string // Para archivos subidos directamente
 }
 
 export interface CaseContext {
@@ -78,12 +79,18 @@ export class AIService {
       })
     })
 
+    const responseData = await response.json()
+
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Error de conexión' }))
-      throw new Error(errorData.error || 'Error al comunicarse con la IA')
+      if (response.status === 429 || responseData.limitReached) {
+        throw new Error(responseData.error || 'Has alcanzado el límite diario de consultas')
+      }
+      throw new Error(responseData.error || 'Error al comunicarse con la IA')
     }
 
-    return response.json()
+    console.log('AI Service response:', responseData)
+
+    return responseData
   }
 
   static async getUsageStats(): Promise<AIUsageStats | null> {
@@ -94,24 +101,76 @@ export class AIService {
         throw new Error('No estás autenticado')
       }
 
+      console.log('🔍 DEBUG: Solicitando estadísticas para usuario:', user.id)
+
       const { data, error } = await supabase
         .rpc('get_ai_usage_stats', { p_user_id: user.id })
 
       if (error) {
-        console.error('Error getting usage stats:', error)
+        console.error('❌ Error getting usage stats:', error)
         throw error
       }
 
+      console.log('📊 DEBUG: Datos RAW recibidos de BD:', data)
+      console.log('📊 DEBUG: Primer elemento:', data?.[0])
+
       return data?.[0] || null
     } catch (error) {
-      console.error('Error in getUsageStats:', error)
-      // Return default stats instead of throwing
+      console.error('❌ Error in getUsageStats:', error)
+      // Solo retornar valores por defecto si es un error menor, pero loggearlo claramente
+      console.warn('⚠️ Retornando valores por defecto debido a error')
       return {
         requests_used: 0,
         requests_limit: 50,
         requests_remaining: 50,
         reset_date: new Date().toISOString().split('T')[0]
       }
+    }
+  }
+
+  // 🔧 Función temporal de debugging para verificar datos directos de BD
+  static async debugUsageStats(): Promise<any> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      if (!user) {
+        throw new Error('No estás autenticado')
+      }
+
+      console.log('🔍 DEBUG: Verificando datos directos de la tabla para usuario:', user.id)
+
+      // Consulta directa a la tabla
+      const { data: directData, error: directError } = await supabase
+        .from('ai_usage_limits')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('reset_date', new Date().toISOString().split('T')[0])
+
+      console.log('📊 DEBUG: Datos directos de tabla ai_usage_limits:', directData)
+
+      if (directError) {
+        console.error('❌ Error en consulta directa:', directError)
+      }
+
+      // Llamar a la función de debugging de BD
+      const { data: debugData, error: debugError } = await supabase
+        .rpc('debug_ai_usage_stats', { p_user_id: user.id })
+
+      console.log('📊 DEBUG: Datos de función debug_ai_usage_stats:', debugData)
+
+      if (debugError) {
+        console.error('❌ Error en función debug:', debugError)
+      }
+
+      return {
+        directData,
+        debugData,
+        directError,
+        debugError
+      }
+    } catch (error) {
+      console.error('❌ Error en debugUsageStats:', error)
+      return { error }
     }
   }
 

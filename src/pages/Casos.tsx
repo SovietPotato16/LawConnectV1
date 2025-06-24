@@ -66,6 +66,74 @@ export function Casos() {
     }
   }
 
+  const deleteCaso = async (casoId: string) => {
+    if (casoId === 'ejemplo-demo-caso-001') {
+      alert('No puedes eliminar el caso de ejemplo')
+      return
+    }
+
+    if (!confirm('¿Estás seguro de que quieres eliminar este caso? Esta acción eliminará también todos sus documentos, notas e imágenes asociadas.')) return
+
+    if (!user) return
+
+    try {
+      // Eliminar documentos asociados del storage
+      const { data: documentos } = await supabase
+        .from('documentos')
+        .select('url')
+        .eq('caso_id', casoId)
+        .eq('user_id', user.id)
+
+      // Eliminar archivos del storage
+      if (documentos && documentos.length > 0) {
+        for (const doc of documentos) {
+          if (doc.url.includes('supabase')) {
+            const fileName = doc.url.split('/').pop()
+            if (fileName) {
+              await supabase.storage
+                .from('documentos')
+                .remove([`${user.id}/${fileName}`])
+            }
+          }
+        }
+      }
+
+      // Eliminar imágenes asociadas del storage
+      const { data: imagenes } = await supabase
+        .from('imagenes')
+        .select('url')
+        .eq('caso_id', casoId)
+        .eq('user_id', user.id)
+
+      if (imagenes && imagenes.length > 0) {
+        for (const img of imagenes) {
+          if (img.url.includes('supabase')) {
+            const fileName = img.url.split('/').pop()
+            if (fileName) {
+              await supabase.storage
+                .from('imagenes')
+                .remove([`${user.id}/casos/${casoId}/${fileName}`])
+            }
+          }
+        }
+      }
+
+      // Eliminar el caso de la base de datos (cascade eliminará notas, documentos e imágenes)
+      const { error: deleteError } = await supabase
+        .from('casos')
+        .delete()
+        .eq('id', casoId)
+        .eq('user_id', user.id)
+
+      if (deleteError) throw deleteError
+
+      await fetchCasos()
+    } catch (error) {
+      console.error('Error deleting caso:', error)
+      alert('Error al eliminar el caso')
+    }
+  }
+
   const filteredCasos = casos.filter(caso => {
     const matchesSearch = caso.titulo.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          caso.cliente?.nombre.toLowerCase().includes(searchTerm.toLowerCase())
@@ -140,7 +208,7 @@ export function Casos() {
       {/* Cases Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredCasos.map((caso) => (
-          <CaseCard key={caso.id} caso={caso} />
+          <CaseCard key={caso.id} caso={caso} onDelete={deleteCaso} />
         ))}
       </div>
 

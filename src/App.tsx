@@ -15,6 +15,8 @@ import { Notas } from '@/pages/Notas'
 import { Documentos } from '@/pages/Documentos'
 import { Configuracion } from '@/pages/Configuracion'
 import { AIAssistant } from '@/pages/AIAssistant'
+import { Facturacion } from '@/pages/Facturacion'
+import { Boveda } from '@/pages/Boveda'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -156,6 +158,22 @@ function App() {
               </ProtectedRoute>
             }>
               <Route index element={<Configuracion />} />
+            </Route>
+            
+            <Route path="/facturacion" element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<Facturacion />} />
+            </Route>
+
+            <Route path="/boveda" element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<Boveda />} />
             </Route>
             
             {/* Catch all */}

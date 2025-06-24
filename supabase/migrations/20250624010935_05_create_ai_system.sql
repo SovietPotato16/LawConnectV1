@@ -1,23 +1,9 @@
-/*
-  # Sistema de IA Assistant con límites y chats guardados
+-- ============================================
+-- Migración 05: Sistema de IA con Claude
+-- ============================================
 
-  1. Nuevas tablas
-    - `ai_usage_limits` - Control de límites de uso por usuario
-    - `ai_chat_sessions` - Sesiones de chat guardadas
-    - `ai_chat_messages` - Mensajes de cada sesión
-    - `email_reminders` - Recordatorios por email
-    
-  2. Funciones
-    - Verificación de límites de uso
-    - Gestión de sesiones de chat
-    
-  3. Seguridad
-    - RLS habilitado en todas las tablas
-    - Políticas para usuarios autenticados
-*/
-
--- Tabla para controlar límites de uso de IA por usuario
-CREATE TABLE IF NOT EXISTS ai_usage_limits (
+-- Tabla para controlar límites de uso de IA
+CREATE TABLE ai_usage_limits (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   requests_used integer DEFAULT 0,
@@ -29,7 +15,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_limits (
 );
 
 -- Tabla para sesiones de chat guardadas
-CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+CREATE TABLE ai_chat_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   title text NOT NULL,
@@ -42,7 +28,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_sessions (
 );
 
 -- Tabla para mensajes de chat
-CREATE TABLE IF NOT EXISTS ai_chat_messages (
+CREATE TABLE ai_chat_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -53,7 +39,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
 );
 
 -- Tabla para recordatorios por email
-CREATE TABLE IF NOT EXISTS email_reminders (
+CREATE TABLE email_reminders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   cliente_id uuid REFERENCES clientes(id) ON DELETE CASCADE,
@@ -74,26 +60,21 @@ ALTER TABLE ai_chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE email_reminders ENABLE ROW LEVEL SECURITY;
 
--- Políticas para ai_usage_limits
-CREATE POLICY "Users can read own usage limits"
+-- Políticas RLS para ai_usage_limits
+CREATE POLICY "Users can manage own usage limits"
   ON ai_usage_limits
-  FOR SELECT
+  FOR ALL
   TO authenticated
-  USING (user_id = auth.uid());
-
-CREATE POLICY "Users can update own usage limits"
-  ON ai_usage_limits
-  FOR UPDATE
-  TO authenticated
-  USING (user_id = auth.uid());
-
-CREATE POLICY "System can insert usage limits"
-  ON ai_usage_limits
-  FOR INSERT
-  TO authenticated
+  USING (user_id = auth.uid())
   WITH CHECK (user_id = auth.uid());
 
--- Políticas para ai_chat_sessions
+CREATE POLICY "Service role can manage usage limits"
+  ON ai_usage_limits
+  FOR ALL
+  TO service_role
+  WITH CHECK (true);
+
+-- Políticas RLS para ai_chat_sessions
 CREATE POLICY "Users can manage own chat sessions"
   ON ai_chat_sessions
   FOR ALL
@@ -101,10 +82,10 @@ CREATE POLICY "Users can manage own chat sessions"
   USING (user_id = auth.uid())
   WITH CHECK (user_id = auth.uid());
 
--- Políticas para ai_chat_messages
-CREATE POLICY "Users can read messages from own sessions"
+-- Políticas RLS para ai_chat_messages
+CREATE POLICY "Users can manage messages from own sessions"
   ON ai_chat_messages
-  FOR SELECT
+  FOR ALL
   TO authenticated
   USING (
     EXISTS (
@@ -112,12 +93,7 @@ CREATE POLICY "Users can read messages from own sessions"
       WHERE ai_chat_sessions.id = ai_chat_messages.session_id 
       AND ai_chat_sessions.user_id = auth.uid()
     )
-  );
-
-CREATE POLICY "Users can insert messages to own sessions"
-  ON ai_chat_messages
-  FOR INSERT
-  TO authenticated
+  )
   WITH CHECK (
     EXISTS (
       SELECT 1 FROM ai_chat_sessions 
@@ -126,7 +102,7 @@ CREATE POLICY "Users can insert messages to own sessions"
     )
   );
 
--- Políticas para email_reminders
+-- Políticas RLS para email_reminders
 CREATE POLICY "Users can manage own email reminders"
   ON email_reminders
   FOR ALL
@@ -145,30 +121,40 @@ CREATE TRIGGER ai_chat_sessions_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION handle_updated_at();
 
--- Función para verificar y actualizar límites de uso
+-- Función para verificar límites de uso (con manejo robusto de errores)
 CREATE OR REPLACE FUNCTION check_ai_usage_limit(p_user_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-  current_usage integer;
-  usage_limit integer;
+  current_usage integer := 0;
+  usage_limit integer := 50;
   today date := CURRENT_DATE;
 BEGIN
-  -- Obtener o crear registro de uso para hoy
-  INSERT INTO ai_usage_limits (user_id, reset_date)
-  VALUES (p_user_id, today)
+  -- Crear registro si no existe
+  INSERT INTO ai_usage_limits (user_id, reset_date, requests_used, requests_limit)
+  VALUES (p_user_id, today, 0, 50)
   ON CONFLICT (user_id, reset_date) DO NOTHING;
   
   -- Obtener límites actuales
-  SELECT requests_used, requests_limit
+  SELECT COALESCE(requests_used, 0), COALESCE(requests_limit, 50)
   INTO current_usage, usage_limit
   FROM ai_usage_limits
   WHERE user_id = p_user_id AND reset_date = today;
   
-  -- Verificar si puede hacer más requests
+  -- Si no hay registro, permitir (fail-safe)
+  IF current_usage IS NULL THEN
+    RETURN true;
+  END IF;
+  
+  -- Verificar límite
   RETURN current_usage < usage_limit;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- En caso de error, permitir uso (fail-safe)
+    RAISE WARNING 'Error in check_ai_usage_limit for user %: %', p_user_id, SQLERRM;
+    RETURN true;
 END;
 $$;
 
@@ -181,10 +167,17 @@ AS $$
 DECLARE
   today date := CURRENT_DATE;
 BEGIN
-  UPDATE ai_usage_limits
-  SET requests_used = requests_used + 1,
-      updated_at = now()
-  WHERE user_id = p_user_id AND reset_date = today;
+  -- Crear registro si no existe
+  INSERT INTO ai_usage_limits (user_id, reset_date, requests_used, requests_limit)
+  VALUES (p_user_id, today, 1, 50)
+  ON CONFLICT (user_id, reset_date) 
+  DO UPDATE SET 
+    requests_used = ai_usage_limits.requests_used + 1,
+    updated_at = now();
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Log error pero no falla
+    RAISE WARNING 'Error in increment_ai_usage for user %: %', p_user_id, SQLERRM;
 END;
 $$;
 
@@ -202,28 +195,56 @@ AS $$
 DECLARE
   today date := CURRENT_DATE;
 BEGIN
-  -- Asegurar que existe registro para hoy
-  INSERT INTO ai_usage_limits (user_id, reset_date)
-  VALUES (p_user_id, today)
+  -- Crear registro si no existe
+  INSERT INTO ai_usage_limits (user_id, reset_date, requests_used, requests_limit)
+  VALUES (p_user_id, today, 0, 50)
   ON CONFLICT (user_id, reset_date) DO NOTHING;
   
+  -- Retornar estadísticas
   RETURN QUERY
   SELECT 
-    al.requests_used,
-    al.requests_limit,
-    (al.requests_limit - al.requests_used) as requests_remaining,
-    al.reset_date
+    COALESCE(al.requests_used, 0) as requests_used,
+    COALESCE(al.requests_limit, 50) as requests_limit,
+    COALESCE(al.requests_limit, 50) - COALESCE(al.requests_used, 0) as requests_remaining,
+    COALESCE(al.reset_date, today) as reset_date
   FROM ai_usage_limits al
-  WHERE al.user_id = p_user_id AND al.reset_date = today;
+  WHERE al.user_id = p_user_id AND al.reset_date = today
+  UNION ALL
+  SELECT 0, 50, 50, today
+  WHERE NOT EXISTS (
+    SELECT 1 FROM ai_usage_limits 
+    WHERE user_id = p_user_id AND reset_date = today
+  )
+  LIMIT 1;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Retornar valores por defecto
+    RETURN QUERY SELECT 0, 50, 50, today;
 END;
 $$;
 
+-- Permisos para service_role
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT ALL ON public.ai_usage_limits TO service_role;
+GRANT ALL ON public.ai_chat_sessions TO service_role;
+GRANT ALL ON public.ai_chat_messages TO service_role;
+GRANT ALL ON public.email_reminders TO service_role;
+
+-- Permisos para funciones
+GRANT EXECUTE ON FUNCTION check_ai_usage_limit(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION get_ai_usage_stats(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION increment_ai_usage(uuid) TO service_role;
+
 -- Índices para optimización
-CREATE INDEX IF NOT EXISTS idx_ai_usage_limits_user_date ON ai_usage_limits(user_id, reset_date);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_user_id ON ai_chat_sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_created_at ON ai_chat_sessions(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session_id ON ai_chat_messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_created_at ON ai_chat_messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_email_reminders_user_id ON email_reminders(user_id);
-CREATE INDEX IF NOT EXISTS idx_email_reminders_scheduled ON email_reminders(scheduled_for);
-CREATE INDEX IF NOT EXISTS idx_email_reminders_status ON email_reminders(status);
+CREATE INDEX idx_ai_usage_limits_user_date ON ai_usage_limits(user_id, reset_date);
+CREATE INDEX idx_ai_chat_sessions_user_id ON ai_chat_sessions(user_id);
+CREATE INDEX idx_ai_chat_sessions_created_at ON ai_chat_sessions(created_at DESC);
+CREATE INDEX idx_ai_chat_sessions_is_favorite ON ai_chat_sessions(is_favorite);
+
+CREATE INDEX idx_ai_chat_messages_session_id ON ai_chat_messages(session_id);
+CREATE INDEX idx_ai_chat_messages_created_at ON ai_chat_messages(created_at);
+CREATE INDEX idx_ai_chat_messages_role ON ai_chat_messages(role);
+
+CREATE INDEX idx_email_reminders_user_id ON email_reminders(user_id);
+CREATE INDEX idx_email_reminders_scheduled ON email_reminders(scheduled_for);
+CREATE INDEX idx_email_reminders_status ON email_reminders(status);

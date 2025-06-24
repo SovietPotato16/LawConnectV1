@@ -1,16 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Bot, User, FileText, Briefcase, Settings, AlertCircle, Sparkles, Zap, Search, BookOpen, Save, Star, Trash2, MessageSquare, BarChart3 } from 'lucide-react'
+import { Send, Bot, User, FileText, Briefcase, Settings, AlertCircle, Search, BookOpen, Save, Star, Trash2, MessageSquare, BarChart3, Upload, Paperclip, X, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { ContextSelector } from '@/components/ContextSelector'
 import { AIService, type ChatSession, type ChatMessage, type AIUsageStats } from '@/lib/aiService'
+import { TextExtractionService } from '@/lib/textExtraction'
+import { StorageService } from '@/lib/storage'
 import { useAuth } from '@/hooks/useAuth'
 import { formatDateTime } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
@@ -54,12 +57,17 @@ export function AIAssistant() {
   const [error, setError] = useState<string | null>(null)
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false)
   const [saveTitle, setSaveTitle] = useState('')
+  // 🔧 NEW: Estados para subida de archivos en el chat
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{[key: string]: number}>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { user } = useAuth()
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages])
+  }, [messages, isTyping])
 
   useEffect(() => {
     if (user) {
@@ -86,10 +94,23 @@ export function AIAssistant() {
 
   const loadUsageStats = async () => {
     try {
+      console.log('🔄 Cargando estadísticas reales desde BD...')
+      
+      // 🔧 DEBUG: Ejecutar función de debugging para investigar el problema
+      console.log('🔍 Ejecutando debugging de estadísticas...')
+      const debugResult = await AIService.debugUsageStats()
+      console.log('🔍 Resultado debugging completo:', debugResult)
+      
       const stats = await AIService.getUsageStats()
-      setUsageStats(stats)
+      console.log('📊 Estadísticas recibidas desde BD:', stats)
+      if (stats) {
+        setUsageStats(stats)
+        console.log('✅ Estado actualizado - Usado:', stats.requests_used, 'Restante:', stats.requests_remaining, 'Límite:', stats.requests_limit)
+      } else {
+        console.warn('⚠️ No se recibieron estadísticas desde BD')
+      }
     } catch (error) {
-      console.error('Error loading usage stats:', error)
+      console.error('❌ Error cargando estadísticas:', error)
     }
   }
 
@@ -120,21 +141,136 @@ export function AIAssistant() {
     }
   }
 
-  const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isTyping) return
+  // 🔧 NEW: Funciones para manejo de archivos en el chat
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    const validFiles = files.filter(file => {
+      // Validar tamaño (máx 10MB por archivo)
+      if (file.size > 10 * 1024 * 1024) {
+        setError(`El archivo ${file.name} es demasiado grande. Máximo 10MB por archivo.`)
+        return false
+      }
+      // Validar tipo
+      if (!TextExtractionService.isTextExtractable(file)) {
+        setError(`El archivo ${file.name} no es compatible. Formatos soportados: PDF, Word, TXT, CSV.`)
+        return false
+      }
+      return true
+    })
+    
+    setUploadedFiles(prev => [...prev, ...validFiles])
+    // Limpiar el input
+    if (event.target) {
+      event.target.value = ''
+    }
+  }
 
-    // Check usage limits
+  const removeUploadedFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const processUploadedFiles = async (): Promise<{ extractedContent: string; uploadedDocuments: string[] }> => {
+    if (uploadedFiles.length === 0) {
+      return { extractedContent: '', uploadedDocuments: [] }
+    }
+
+    setIsUploading(true)
+    let allExtractedContent = ''
+    const uploadedDocuments: string[] = []
+
+    try {
+      for (const file of uploadedFiles) {
+        // Actualizar progreso
+        setUploadProgress(prev => ({ ...prev, [file.name]: 25 }))
+
+        // Extraer texto del archivo
+        console.log(`Processing file: ${file.name}`)
+        let extractedText = ''
+        try {
+          extractedText = await TextExtractionService.extractTextFromFile(file)
+          setUploadProgress(prev => ({ ...prev, [file.name]: 50 }))
+        } catch (extractError) {
+          console.error('Error extracting text:', extractError)
+          extractedText = `Error al extraer texto de ${file.name}: ${extractError instanceof Error ? extractError.message : 'Error desconocido'}`
+        }
+
+        // Subir archivo al storage
+        try {
+          const uploadResult = await StorageService.uploadDocument(file, user?.id || '', 'chat-uploads')
+          setUploadProgress(prev => ({ ...prev, [file.name]: 75 }))
+
+          if (uploadResult.error) {
+            throw new Error(uploadResult.error)
+          }
+
+          // Guardar en la base de datos
+          const { error: dbError } = await supabase
+            .from('documentos')
+            .insert({
+              nombre: file.name,
+              tipo: file.type,
+              tamaño: file.size,
+              url: uploadResult.url,
+              contenido: extractedText,
+              user_id: user?.id
+            })
+
+          if (dbError) throw dbError
+
+          uploadedDocuments.push(file.name)
+          allExtractedContent += `\n\n--- ARCHIVO: ${file.name} ---\n${extractedText}\n--- FIN ARCHIVO ---`
+          
+          setUploadProgress(prev => ({ ...prev, [file.name]: 100 }))
+        } catch (uploadError) {
+          console.error('Error uploading file:', uploadError)
+          allExtractedContent += `\n\n--- ARCHIVO: ${file.name} ---\nError al subir archivo: ${uploadError instanceof Error ? uploadError.message : 'Error desconocido'}\n--- FIN ARCHIVO ---`
+        }
+      }
+
+      return { extractedContent: allExtractedContent, uploadedDocuments }
+    } finally {
+      setIsUploading(false)
+      setUploadProgress({})
+      setUploadedFiles([]) // Limpiar archivos después de procesarlos
+    }
+  }
+
+  const handleSendMessage = async () => {
+    if ((!inputMessage.trim() && uploadedFiles.length === 0) || isTyping) return
+
+    // 🔧 FIX: Verificación más robusta de límites de uso
     if (usageStats && usageStats.requests_remaining <= 0) {
-      alert('Has alcanzado el límite de 50 consultas diarias. El límite se restablece mañana.')
+      setError('Has alcanzado el límite de 50 consultas diarias. El límite se restablece mañana.')
       return
+    }
+
+    // 🔧 NEW: Procesar archivos subidos si los hay
+    let fileProcessingResult = { extractedContent: '', uploadedDocuments: [] as string[] }
+    if (uploadedFiles.length > 0) {
+      try {
+        fileProcessingResult = await processUploadedFiles()
+      } catch (fileError) {
+        console.error('Error processing uploaded files:', fileError)
+        setError('Error procesando los archivos subidos. Intenta nuevamente.')
+        return
+      }
+    }
+
+    // 🔧 FIX: NO incluir el contenido de archivos en el mensaje visible del usuario
+    // El contenido se enviará como contexto separado al backend
+    let displayMessage = inputMessage
+    if (fileProcessingResult.uploadedDocuments.length > 0) {
+      displayMessage += `\n\n📎 **Archivos adjuntos:** ${fileProcessingResult.uploadedDocuments.join(', ')}`
     }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       session_id: currentSessionId || '',
       role: 'user',
-      content: inputMessage,
-      context_used: {},
+      content: displayMessage, // Solo mostrar el mensaje + nombres de archivos
+      context_used: {
+        documents: fileProcessingResult.uploadedDocuments.map(fileName => ({ id: '', nombre: fileName }))
+      },
       created_at: new Date().toISOString(),
     }
 
@@ -143,20 +279,45 @@ export function AIAssistant() {
     setIsTyping(true)
     setError(null)
 
+    // 🔧 FIX: Actualización inmediata de estadísticas para feedback visual
+    if (usageStats) {
+      setUsageStats(prev => prev ? {
+        ...prev,
+        requests_used: prev.requests_used + 1,
+        requests_remaining: prev.requests_remaining - 1
+      } : prev)
+      console.log('📈 Incremento local inmediato - usado:', usageStats.requests_used + 1, 'restante:', usageStats.requests_remaining - 1)
+    }
+
     try {
       // Get context data
       const documentContext = await getDocumentContext()
       const caseContext = await getCaseContext()
 
       // Generate session title if it's a new session
-      const sessionTitle = !currentSessionId ? inputMessage.substring(0, 50) + '...' : undefined
+      const sessionTitle = !currentSessionId ? (inputMessage || 'Chat con archivos').substring(0, 50) + '...' : undefined
 
-      // Send message to AI
+      // 🔧 FIX: Preparar contexto completo para el AI
+      // Combinar contexto de documentos seleccionados + archivos subidos
+      let enhancedDocumentContext = documentContext || []
+      
+      // Agregar documentos subidos como contexto adicional
+      if (fileProcessingResult.extractedContent) {
+        const uploadedDocsContext = fileProcessingResult.uploadedDocuments.map((fileName, index) => ({
+          id: `uploaded-${Date.now()}-${index}`,
+          nombre: fileName,
+          tipo: 'Archivo subido',
+          contenido: fileProcessingResult.extractedContent // Incluir contenido aquí
+        }))
+        enhancedDocumentContext = [...enhancedDocumentContext, ...uploadedDocsContext]
+      }
+
+      // Send message to AI (con el mensaje original + contexto enriquecido)
       const response = await AIService.sendMessage(
-        inputMessage,
+        inputMessage, // Solo el mensaje original, sin contenido de archivos
         currentSessionId || undefined,
         sessionTitle,
-        documentContext,
+        enhancedDocumentContext,
         caseContext
       )
 
@@ -179,27 +340,52 @@ export function AIAssistant() {
 
       setMessages(prev => [...prev, aiMessage])
       
-      // Update usage stats
+      // 🔧 FIX: Usar estadísticas del backend si están disponibles (son las reales de la BD)
       if (response.usage) {
+        console.log('📊 Usando estadísticas del backend (datos reales de BD):', response.usage)
         setUsageStats(response.usage)
+      } else {
+        // Si no vienen del backend, recargar desde BD con delay
+        console.log('⚠️ Backend no devolvió estadísticas, recargando desde BD...')
+        setTimeout(async () => {
+          await loadUsageStats()
+        }, 500)
       }
 
       // Reload sessions to show new session
       await loadChatSessions()
     } catch (error) {
       console.error('Error sending message:', error)
-      setError(error instanceof Error ? error.message : 'Error al comunicarse con la IA')
       
-      const errorMessage: ChatMessage = {
+      // 🔧 FIX: Revertir el incremento local porque la solicitud falló
+      console.log('❌ Error en solicitud, revirtiendo incremento local...')
+      if (usageStats) {
+        setUsageStats(prev => prev ? {
+          ...prev,
+          requests_used: Math.max(0, prev.requests_used - 1),
+          requests_remaining: Math.min(prev.requests_limit, prev.requests_remaining + 1)
+        } : prev)
+        console.log('🔄 Incremento local revertido - usado:', Math.max(0, usageStats.requests_used - 1))
+      }
+      
+      // También recargar desde BD para asegurar consistencia
+      setTimeout(async () => {
+        await loadUsageStats()
+      }, 300)
+      
+      const errorMessage = error instanceof Error ? error.message : 'Error al comunicarse con la IA'
+      setError(errorMessage)
+      
+      const errorMessageObj: ChatMessage = {
         id: (Date.now() + 1).toString(),
         session_id: currentSessionId || '',
         role: 'assistant',
-        content: `❌ **Error**: ${error instanceof Error ? error.message : 'Error al comunicarse con la IA'}\n\nPor favor, intenta nuevamente.`,
+        content: `❌ **Error**: ${errorMessage}\n\nPor favor, intenta nuevamente.`,
         context_used: {},
         created_at: new Date().toISOString(),
       }
       
-      setMessages(prev => [...prev, errorMessage])
+      setMessages(prev => [...prev, errorMessageObj])
     } finally {
       setIsTyping(false)
     }
@@ -252,19 +438,7 @@ export function AIAssistant() {
     setInputMessage(question)
   }
 
-  const handleQuickAnalysis = async (type: 'document' | 'case') => {
-    let prompt = ''
-    if (type === 'document' && selectedDocuments.length > 0) {
-      prompt = 'Proporciona un análisis detallado de los documentos seleccionados, incluyendo riesgos, oportunidades y recomendaciones.'
-    } else if (type === 'case' && selectedCase) {
-      prompt = 'Analiza este caso y proporciona una estrategia legal recomendada con pasos específicos.'
-    }
 
-    if (prompt) {
-      setInputMessage(prompt)
-      setTimeout(() => handleSendMessage(), 100)
-    }
-  }
 
   const startNewChat = () => {
     setMessages([])
@@ -324,28 +498,16 @@ export function AIAssistant() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-text">IA Legal Assistant</h1>
+          <h1 className="text-2xl lg:text-3xl font-bold text-text">IA Legal Assistant</h1>
           <p className="text-subtext0">Tu asistente inteligente para consultas legales</p>
-        </div>
-        <div className="flex gap-3">
-          <ContextSelector
-            selectedDocuments={selectedDocuments}
-            selectedCase={selectedCase}
-            onDocumentsChange={setSelectedDocuments}
-            onCaseChange={setSelectedCase}
-          />
-          <Button variant="outline" onClick={startNewChat}>
-            <MessageSquare className="h-4 w-4 mr-2" />
-            Nuevo Chat
-          </Button>
         </div>
       </div>
 
       {/* Usage Stats */}
       {usageStats && (
-        <Card className="bg-blue/5 border-blue/20">
+        <Card className={`${usageStats.requests_remaining <= 5 ? 'bg-red/5 border-red/20' : usageStats.requests_remaining <= 10 ? 'bg-yellow/5 border-yellow/20' : 'bg-blue/5 border-blue/20'}`}>
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium">Uso diario de IA</span>
@@ -354,17 +516,30 @@ export function AIAssistant() {
               </span>
             </div>
             <Progress value={usagePercentage} className="h-2" />
-            <p className="text-xs text-subtext0 mt-1">
-              {usageStats.requests_remaining} consultas restantes hoy
-            </p>
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-xs text-subtext0">
+                {usageStats.requests_remaining} consultas restantes hoy
+              </p>
+              {usageStats.requests_remaining <= 5 && (
+                <Badge variant="destructive" className="text-xs">
+                  {usageStats.requests_remaining === 0 ? 'Límite alcanzado' : 'Pocas consultas restantes'}
+                </Badge>
+              )}
+            </div>
+            {usageStats.requests_remaining === 0 && (
+              <p className="text-xs text-red mt-2">
+                ⚠️ Has alcanzado el límite diario. Se restablece mañana.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Chat Interface */}
-        <div className="lg:col-span-3">
-          <Card className="h-[700px] flex flex-col">
+      {/* Layout: Chat primero en móvil, sidebar después */}
+      <div className="flex flex-col lg:grid lg:grid-cols-4 gap-6">
+        {/* Chat Interface - Prioridad en móvil */}
+        <div className="order-1 lg:order-1 lg:col-span-3">
+          <Card className="h-[calc(100vh-300px)] min-h-[500px] max-h-[800px] flex flex-col">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
@@ -373,6 +548,11 @@ export function AIAssistant() {
                   {currentSessionId && (
                     <Badge variant="outline" className="text-xs">
                       Sesión activa
+                    </Badge>
+                  )}
+                  {usageStats?.requests_remaining === 0 && (
+                    <Badge variant="destructive" className="text-xs">
+                      Sin consultas disponibles
                     </Badge>
                   )}
                 </CardTitle>
@@ -428,9 +608,9 @@ export function AIAssistant() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="flex-1 flex flex-col">
+            <CardContent className="flex-1 flex flex-col min-h-0">
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2">
+              <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 scroll-smooth px-1">
                 {messages.map((message) => (
                   <div
                     key={message.id}
@@ -467,11 +647,11 @@ export function AIAssistant() {
                         })}
                       </div>
                       
-                      {message.context_used && (message.context_used.documents?.length > 0 || message.context_used.case) && (
+                      {message.context_used && ((message.context_used.documents && message.context_used.documents.length > 0) || message.context_used.case) && (
                         <div className="mt-3 pt-3 border-t border-surface2">
                           <p className="text-xs text-subtext0 mb-2">Contexto utilizado:</p>
                           <div className="flex flex-wrap gap-1">
-                            {message.context_used.documents?.map(doc => (
+                            {message.context_used.documents && message.context_used.documents.map(doc => (
                               <Badge key={doc.id} variant="outline" className="text-xs">
                                 <FileText className="h-3 w-3 mr-1" />
                                 {doc.nombre}
@@ -521,21 +701,123 @@ export function AIAssistant() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* 🔧 NEW: Archivos subidos */}
+              {uploadedFiles.length > 0 && (
+                <div className="mb-3 p-3 bg-surface1 rounded-lg border border-surface2">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-text">Archivos para enviar:</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setUploadedFiles([])}
+                      className="text-red hover:text-red"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {uploadedFiles.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 bg-surface0 rounded">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <FileText className="h-4 w-4 text-blue flex-shrink-0" />
+                          <span className="text-sm text-text truncate flex-1">{file.name}</span>
+                          <span className="text-xs text-subtext0 flex-shrink-0">
+                            ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                          </span>
+                        </div>
+                        {isUploading && uploadProgress[file.name] && (
+                          <div className="flex items-center gap-2">
+                            <Progress value={uploadProgress[file.name]} className="w-20 h-2" />
+                            <span className="text-xs text-subtext0">{uploadProgress[file.name]}%</span>
+                          </div>
+                        )}
+                        {!isUploading && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeUploadedFile(index)}
+                            className="text-red hover:text-red h-6 w-6 p-0"
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {isUploading && (
+                    <div className="mt-2 text-xs text-blue">
+                      <div className="flex items-center gap-2">
+                        <div className="animate-spin rounded-full h-3 w-3 border-b border-blue"></div>
+                        Procesando archivos...
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Input */}
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-end">
+                <div className="flex gap-1 flex-shrink-0">
+                  {/* Botón de contexto con animación hover */}
+                  <div className="group">
+                    <ContextSelector
+                      selectedDocuments={selectedDocuments}
+                      selectedCase={selectedCase}
+                      onDocumentsChange={setSelectedDocuments}
+                      onCaseChange={setSelectedCase}
+                    />
+                  </div>
+                  
+                  {/* Botón nuevo chat */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={startNewChat}
+                    disabled={isTyping || isUploading}
+                    title="Iniciar nuevo chat"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                  </Button>
+                  
+                  {/* Botón de subir archivos */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isTyping || isUploading || (usageStats?.requests_remaining === 0)}
+                    title="Subir archivos (PDF, Word, TXT, CSV)"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </Button>
+                  
+                  {/* Input de archivo oculto */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileSelect}
+                    multiple
+                    accept=".pdf,.doc,.docx,.txt,.csv"
+                    className="hidden"
+                  />
+                </div>
+                
                 <Input
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder="Escribe tu consulta legal..."
+                  placeholder="Escribe tu consulta legal o sube archivos..."
                   onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                  disabled={isTyping || (usageStats?.requests_remaining === 0)}
+                  disabled={isTyping || isUploading || (usageStats?.requests_remaining === 0)}
                   className="flex-1"
                 />
                 <Button 
                   onClick={handleSendMessage} 
-                  disabled={!inputMessage.trim() || isTyping || (usageStats?.requests_remaining === 0)}
+                  disabled={(!inputMessage.trim() && uploadedFiles.length === 0) || isTyping || isUploading || (usageStats?.requests_remaining === 0)}
                 >
-                  <Send className="h-4 w-4" />
+                  {isUploading ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b border-base"></div>
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
 
@@ -548,124 +830,9 @@ export function AIAssistant() {
           </Card>
         </div>
 
-        {/* Sidebar */}
-        <div className="space-y-6">
-          {/* Saved Chats */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Chats guardados</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {chatSessions.length === 0 ? (
-                <p className="text-sm text-subtext0 text-center py-4">
-                  No tienes chats guardados
-                </p>
-              ) : (
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {chatSessions.slice(0, 10).map((session) => (
-                    <div
-                      key={session.id}
-                      className={`p-2 rounded-lg cursor-pointer transition-colors group ${
-                        currentSessionId === session.id ? 'bg-blue/10 border border-blue/30' : 'hover:bg-surface1'
-                      }`}
-                      onClick={() => loadChatSession(session.id)}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-sm font-medium truncate">{session.title}</h4>
-                          <p className="text-xs text-subtext0">
-                            {new Date(session.updated_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleFavoriteSession(session.id, session.is_favorite)
-                            }}
-                          >
-                            <Star className={`h-3 w-3 ${session.is_favorite ? 'fill-yellow text-yellow' : 'text-subtext0'}`} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 w-6 p-0 text-red hover:text-red"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              deleteSession(session.id)
-                            }}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Quick Actions */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Análisis rápido</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                onClick={() => handleQuickAnalysis('document')}
-                disabled={selectedDocuments.length === 0}
-              >
-                <Sparkles className="h-4 w-4 mr-2" />
-                Analizar documentos
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                onClick={() => handleQuickAnalysis('case')}
-                disabled={!selectedCase}
-              >
-                <Zap className="h-4 w-4 mr-2" />
-                Estrategia de caso
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Suggested Questions */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Consultas sugeridas</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {suggestedQuestions.map((category, categoryIndex) => (
-                  <div key={categoryIndex}>
-                    <h4 className="font-medium text-sm text-text mb-2">{category.category}</h4>
-                    <div className="space-y-2">
-                      {category.questions.map((question, questionIndex) => (
-                        <Button
-                          key={questionIndex}
-                          variant="ghost"
-                          size="sm"
-                          className="w-full text-left justify-start h-auto p-2 text-xs"
-                          onClick={() => handleSuggestedQuestion(question)}
-                        >
-                          {question}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Capabilities */}
+        {/* Sidebar - Después del chat en móvil */}
+        <div className="order-2 lg:order-2 space-y-4 lg:space-y-6">
+          {/* Capacidades - Primero */}
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Capacidades</CardTitle>
@@ -677,23 +844,133 @@ export function AIAssistant() {
                   <span className="text-sm">Análisis de documentos</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Search className="h-4 w-4 text-green" />
-                  <span className="text-sm">Búsqueda de precedentes</span>
+                  <Upload className="h-4 w-4 text-green" />
+                  <span className="text-sm">Subida directa de archivos</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-yellow" />
+                  <Search className="h-4 w-4 text-yellow" />
+                  <span className="text-sm">Extracción de texto PDF/Word</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-purple" />
                   <span className="text-sm">Redacción asistida</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 text-purple" />
+                  <BookOpen className="h-4 w-4 text-red" />
                   <span className="text-sm">Consultas jurisprudenciales</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Briefcase className="h-4 w-4 text-red" />
+                  <Briefcase className="h-4 w-4 text-teal" />
                   <span className="text-sm">Estrategias de caso</span>
                 </div>
               </div>
+              <div className="mt-4 p-3 bg-blue/10 border border-blue/20 rounded-lg">
+                <p className="text-xs text-blue font-medium mb-1">💡 Nuevo: Subida de archivos</p>
+                <p className="text-xs text-subtext0">
+                  Ahora puedes subir PDFs, documentos Word, archivos TXT y CSV directamente en el chat. 
+                  El texto se extrae automáticamente para análisis.
+                </p>
+              </div>
             </CardContent>
+          </Card>
+
+          {/* Chats Guardados - Dropdown */}
+          <Card>
+            <CardHeader>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="w-full justify-between p-0 h-auto">
+                    <CardTitle className="text-lg">Chats guardados ({chatSessions.length})</CardTitle>
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-80 max-h-64 overflow-y-auto">
+                  {chatSessions.length === 0 ? (
+                    <div className="p-4 text-center">
+                      <p className="text-sm text-subtext0">No tienes chats guardados</p>
+                    </div>
+                  ) : (
+                    <>
+                      {chatSessions.slice(0, 10).map((session, index) => (
+                        <div key={session.id}>
+                          <DropdownMenuItem
+                            className={`flex items-start justify-between p-3 cursor-pointer ${
+                              currentSessionId === session.id ? 'bg-blue/10' : ''
+                            }`}
+                            onClick={() => loadChatSession(session.id)}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <h4 className="text-sm font-medium truncate">{session.title}</h4>
+                              <p className="text-xs text-subtext0">
+                                {new Date(session.updated_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <div className="flex gap-1 ml-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toggleFavoriteSession(session.id, session.is_favorite)
+                                }}
+                              >
+                                <Star className={`h-3 w-3 ${session.is_favorite ? 'fill-yellow text-yellow' : 'text-subtext0'}`} />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 text-red hover:text-red"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  deleteSession(session.id)
+                                }}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </DropdownMenuItem>
+                          {index < chatSessions.slice(0, 10).length - 1 && <DropdownMenuSeparator />}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </CardHeader>
+          </Card>
+
+          {/* Consultas Sugeridas - Dropdown */}
+          <Card>
+            <CardHeader>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="w-full justify-between p-0 h-auto">
+                    <CardTitle className="text-lg">Consultas sugeridas</CardTitle>
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-96 max-h-80 overflow-y-auto">
+                  {suggestedQuestions.map((category, categoryIndex) => (
+                    <div key={categoryIndex}>
+                      <div className="px-3 py-2 bg-surface1">
+                        <h4 className="font-medium text-sm text-text">{category.category}</h4>
+                      </div>
+                      {category.questions.map((question, questionIndex) => (
+                        <DropdownMenuItem
+                          key={questionIndex}
+                          className="p-3 cursor-pointer text-xs whitespace-normal break-words leading-relaxed min-h-[3rem]"
+                          onClick={() => handleSuggestedQuestion(question)}
+                        >
+                          <span className="text-left">{question}</span>
+                        </DropdownMenuItem>
+                      ))}
+                      {categoryIndex < suggestedQuestions.length - 1 && <DropdownMenuSeparator />}
+                    </div>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </CardHeader>
           </Card>
         </div>
       </div>

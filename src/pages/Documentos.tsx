@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Upload, Search, Filter, FileText, Download, Trash2, Eye, AlertCircle } from 'lucide-react'
+import { Upload, Search, Filter, FileText, Download, Trash2, Eye, AlertCircle, TestTube, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { DocumentViewer } from '@/components/DocumentViewer'
 import { StorageService } from '@/lib/storage'
+import { TextExtractionService } from '@/lib/textExtraction'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { formatDate } from '@/lib/utils'
@@ -66,8 +67,49 @@ export function Documentos() {
   const [uploadForm, setUploadForm] = useState({
     caso_id: '',
     cliente_id: ''
-  })
+})
+
+  // 🔧 NEW: Estado para prueba de extracción de texto
+  const [isTestingExtraction, setIsTestingExtraction] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
   const { user } = useAuth()
+
+  // 🔧 NEW: Función de prueba para extracción de texto
+  const handleTestExtraction = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setIsTestingExtraction(true)
+    setTestResult(null)
+
+    try {
+      console.log('🧪 TESTING: Starting text extraction test for:', file.name)
+      const extractedText = await TextExtractionService.extractTextFromFile(file)
+      console.log('🧪 TESTING: Extraction completed, length:', extractedText.length)
+      
+      setTestResult(`✅ EXTRACCIÓN EXITOSA
+Archivo: ${file.name}
+Tipo: ${file.type}
+Tamaño: ${(file.size / 1024 / 1024).toFixed(2)} MB
+Texto extraído: ${extractedText.length} caracteres
+
+CONTENIDO EXTRAÍDO:
+${extractedText.substring(0, 500)}${extractedText.length > 500 ? '\n\n[TRUNCADO - Los primeros 500 caracteres]' : ''}`)
+    } catch (error) {
+      console.error('🧪 TESTING: Error in extraction test:', error)
+      setTestResult(`❌ ERROR EN EXTRACCIÓN
+Archivo: ${file.name}
+Error: ${error instanceof Error ? error.message : 'Error desconocido'}
+
+Revisa la consola del navegador para más detalles.`)
+    } finally {
+      setIsTestingExtraction(false)
+      // Limpiar el input
+      if (event.target) {
+        event.target.value = ''
+      }
+    }
+  }
 
   useEffect(() => {
     fetchDocumentos()
@@ -100,7 +142,7 @@ export function Documentos() {
     } finally {
       setLoading(false)
     }
-  }
+}
 
   const fetchCasos = async () => {
     if (!user) return
@@ -117,9 +159,9 @@ export function Documentos() {
     } catch (error) {
       console.error('Error fetching casos:', error)
     }
-  }
+}
 
-  const fetchClientes = async () => {
+const fetchClientes = async () => {
     if (!user) return
 
     try {
@@ -134,9 +176,9 @@ export function Documentos() {
     } catch (error) {
       console.error('Error fetching clientes:', error)
     }
-  }
+}
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file || !user) return
 
@@ -155,7 +197,7 @@ export function Documentos() {
         throw new Error(uploadResult.error)
       }
 
-      // Save document record
+      // 🔧 Save document record with extracted content
       const { error: dbError } = await supabase
         .from('documentos')
         .insert({
@@ -163,9 +205,10 @@ export function Documentos() {
           tipo: file.type,
           tamaño: file.size,
           url: uploadResult.url,
+          contenido: uploadResult.contenido || null,  // 🔧 Guardar contenido extraído
           caso_id: uploadForm.caso_id || null,
           cliente_id: uploadForm.cliente_id || null,
-          user_id: user.id
+          user_id: user?.id || ''
         })
 
       if (dbError) throw dbError
@@ -179,7 +222,7 @@ export function Documentos() {
     } finally {
       setUploading(false)
     }
-  }
+}
 
   const deleteDocumento = async (docId: string) => {
     if (docId === 'ejemplo-documento-001') {
@@ -188,6 +231,7 @@ export function Documentos() {
     }
 
     if (!confirm('¿Estás seguro de que quieres eliminar este documento?')) return
+    if (!user) return
 
     try {
       // Get document info to delete from storage
@@ -217,7 +261,7 @@ export function Documentos() {
       console.error('Error deleting documento:', error)
       alert('Error al eliminar el documento')
     }
-  }
+}
 
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return 'Desconocido'
@@ -284,14 +328,40 @@ export function Documentos() {
           <h1 className="text-3xl font-bold text-text">Documentos</h1>
           <p className="text-subtext0">Gestiona todos tus documentos legales</p>
         </div>
-        <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Upload className="h-4 w-4 mr-2" />
-              Subir Documento
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
+        <div className="flex gap-2">
+          {/* 🔧 NEW: Botón de prueba para extracción de texto */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => document.getElementById('test-extraction-input')?.click()}
+            disabled={isTestingExtraction}
+            title="Probar extracción de texto (sin guardar)"
+          >
+            {isTestingExtraction ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b border-blue mr-2" />
+            ) : (
+              <TestTube className="h-4 w-4 mr-2" />
+            )}
+            Probar Extracción
+          </Button>
+          
+          {/* Input de archivo oculto para pruebas */}
+          <input
+            type="file"
+            id="test-extraction-input"
+            onChange={handleTestExtraction}
+            accept=".pdf,.doc,.docx,.txt,.csv"
+            className="hidden"
+          />
+          
+          <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Upload className="h-4 w-4 mr-2" />
+                Subir Documento
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
             <DialogHeader>
               <DialogTitle>Subir nuevo documento</DialogTitle>
             </DialogHeader>
@@ -360,6 +430,32 @@ export function Documentos() {
           </DialogContent>
         </Dialog>
       </div>
+      </div>
+
+      {/* 🔧 NEW: Panel de resultados de prueba */}
+      {testResult && (
+        <Card className="border-blue/20 bg-blue/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TestTube className="h-5 w-5 text-blue" />
+              Resultado de Prueba de Extracción
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTestResult(null)}
+                className="ml-auto"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="text-xs bg-surface0 p-3 rounded-lg overflow-auto max-h-96 whitespace-pre-wrap">
+              {testResult}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4">
@@ -435,7 +531,7 @@ export function Documentos() {
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                       <IconComponent className="h-8 w-8 text-blue flex-shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <CardTitle className="text-base line-clamp-2">{doc.nombre}</CardTitle>
+                        <CardTitle className="text-base line-clamp-2 text-white">{doc.nombre}</CardTitle>
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-xs text-subtext0">{formatFileSize(doc.tamaño)}</span>
                           <span className="text-xs text-subtext0">{formatDate(doc.created_at)}</span>

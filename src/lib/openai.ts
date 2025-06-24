@@ -203,20 +203,14 @@ Proporciona una estrategia práctica y accionable.`
 let openAIService: OpenAIService | null = null
 
 export function getOpenAIService(): OpenAIService | null {
-  const apiKey = import.meta.env.VITE_OPENAI_API_KEY
+  // ✅ Claude se maneja en el servidor, no necesitamos API key en frontend
+  console.info('Claude API se maneja de forma segura en el servidor (Edge Functions)')
   
-  if (!apiKey) {
-    console.warn('OpenAI API Key not configured')
-    return null
-  }
-
-  if (!openAIService) {
-    openAIService = new OpenAIService(apiKey)
-  }
-
-  return openAIService
+  // Retornar null ya que usamos Claude en servidor
+  return null
 }
 
 export function isOpenAIConfigured(): boolean {
-  return !!import.meta.env.VITE_OPENAI_API_KEY
+  // ✅ Siempre true ya que Claude está configurado en el servidor
+  return true
 }

@@ -33,6 +33,8 @@ import { PriorityBadge } from '@/components/PriorityBadge'
 import { TagManager } from '@/components/TagManager'
 import { DocumentViewer } from '@/components/DocumentViewer'
 import { NoteViewer } from '@/components/NoteViewer'
+import { StorageService } from '@/lib/storage'
+import { ImageStorageSetup } from '@/lib/setupImageStorage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { formatDate, formatDateTime } from '@/lib/utils'
@@ -64,6 +66,7 @@ interface Documento {
   caso_id: string | null
   user_id: string
   created_at: string
+  contenido?: string | null
 }
 
 interface Imagen {
@@ -223,13 +226,16 @@ export function CasoDetalle() {
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all')
   const [selectedDocument, setSelectedDocument] = useState<Documento | null>(null)
   const [isViewerOpen, setIsViewerOpen] = useState(false)
+  const [isSetupLoading, setIsSetupLoading] = useState(false)
   const [editForm, setEditForm] = useState({
     titulo: '',
     descripcion: '',
     estado: '',
     prioridad: '',
-    fecha_vencimiento: ''
+    fecha_vencimiento: '',
+    cliente_id: ''
   })
+  const [clientes, setClientes] = useState<{ id: string; nombre: string; email: string | null }[]>([])
   const [noteForm, setNoteForm] = useState({
     titulo: '',
     contenido: '',
@@ -246,8 +252,26 @@ export function CasoDetalle() {
       fetchDocumentos()
       fetchImagenes()
       fetchNotas()
+      fetchClientes()
     }
   }, [id, user])
+
+  const fetchClientes = async () => {
+    if (!user) return
+
+    try {
+      const { data, error } = await supabase
+        .from('clientes')
+        .select('id, nombre, email')
+        .eq('user_id', user.id)
+        .order('nombre')
+
+      if (error) throw error
+      setClientes(data || [])
+    } catch (error) {
+      console.error('Error fetching clientes:', error)
+    }
+  }
 
   const fetchCaso = async () => {
     if (!user || !id) return
@@ -261,7 +285,8 @@ export function CasoDetalle() {
           descripcion: casoEjemplo.descripcion || '',
           estado: casoEjemplo.estado,
           prioridad: casoEjemplo.prioridad,
-          fecha_vencimiento: casoEjemplo.fecha_vencimiento ? casoEjemplo.fecha_vencimiento.split('T')[0] : ''
+          fecha_vencimiento: casoEjemplo.fecha_vencimiento ? casoEjemplo.fecha_vencimiento.split('T')[0] : '',
+          cliente_id: casoEjemplo.cliente_id || ''
         })
         setLoading(false)
         return
@@ -285,7 +310,8 @@ export function CasoDetalle() {
           descripcion: data.descripcion || '',
           estado: data.estado,
           prioridad: data.prioridad,
-          fecha_vencimiento: data.fecha_vencimiento ? data.fecha_vencimiento.split('T')[0] : ''
+          fecha_vencimiento: data.fecha_vencimiento ? data.fecha_vencimiento.split('T')[0] : '',
+          cliente_id: data.cliente_id || ''
         })
       }
     } catch (error) {
@@ -471,43 +497,41 @@ export function CasoDetalle() {
 
     setUploading(true)
     try {
-      // Create a unique file path
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${user.id}/${Date.now()}-${file.name}`
+      console.log('📤 Iniciando subida de archivo desde detalle de caso:', file.name)
+      
+      // Use StorageService which includes text extraction
+      const uploadResult = await StorageService.uploadDocument(
+        file, 
+        user.id, 
+        'documentos'
+      )
 
-      // Upload file to Supabase Storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('documentos')
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: false
-        })
+      if (uploadResult.error) {
+        throw new Error(uploadResult.error)
+      }
 
-      if (uploadError) throw uploadError
+      console.log('✅ Archivo subido exitosamente:', uploadResult.url)
 
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('documentos')
-        .getPublicUrl(fileName)
-
-      // Save document record
+      // Save document record with extracted content
       const { error: dbError } = await supabase
         .from('documentos')
         .insert({
           nombre: file.name,
           tipo: file.type,
           tamaño: file.size,
-          url: publicUrl,
+          url: uploadResult.url,
+          contenido: uploadResult.contenido,
           caso_id: id,
           user_id: user.id
         })
 
       if (dbError) throw dbError
 
+      console.log('✅ Documento guardado en BD con contenido extraído')
       await fetchDocumentos()
     } catch (error) {
-      console.error('Error uploading file:', error)
-      alert('Error al subir el archivo')
+      console.error('❌ Error uploading file:', error)
+      alert(`Error al subir el archivo: ${error instanceof Error ? error.message : 'Error desconocido'}`)
     } finally {
       setUploading(false)
     }
@@ -525,9 +549,29 @@ export function CasoDetalle() {
 
     setUploadingImage(true)
     try {
+      console.log('🖼️ Iniciando subida de imagen:', file.name, 'Tipo:', file.type, 'Tamaño:', file.size)
+      
       // Create a unique file path
       const fileExt = file.name.split('.').pop()
       const fileName = `${user.id}/casos/${id}/${Date.now()}-${file.name}`
+      
+      console.log('📁 Ruta de archivo:', fileName)
+
+      // Check if the bucket exists first
+      const { data: buckets, error: bucketsError } = await supabase.storage.listBuckets()
+      
+      if (bucketsError) {
+        console.error('❌ Error listando buckets:', bucketsError)
+        throw new Error('Error verificando almacenamiento: ' + bucketsError.message)
+      }
+      
+      const hasImagesBucket = buckets?.some(bucket => bucket.name === 'imagenes')
+      if (!hasImagesBucket) {
+        console.error('❌ Bucket "imagenes" no encontrado')
+        throw new Error('El bucket de imágenes no está configurado. Contacta al administrador.')
+      }
+
+      console.log('✅ Bucket "imagenes" encontrado, subiendo archivo...')
 
       // Upload file to Supabase Storage
       const { data: uploadData, error: uploadError } = await supabase.storage
@@ -537,31 +581,55 @@ export function CasoDetalle() {
           upsert: false
         })
 
-      if (uploadError) throw uploadError
+      if (uploadError) {
+        console.error('❌ Error subiendo a storage:', uploadError)
+        throw new Error('Error al subir imagen: ' + uploadError.message)
+      }
+
+      console.log('✅ Imagen subida exitosamente:', uploadData.path)
 
       // Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('imagenes')
         .getPublicUrl(fileName)
 
+      console.log('🔗 URL pública generada:', publicUrl)
+
       // Save image record
+      const imageRecord = {
+        nombre: file.name,
+        tipo: file.type,
+        tamaño: file.size,
+        url: publicUrl,
+        caso_id: id,
+        user_id: user.id
+      }
+      
+      console.log('💾 Guardando registro en BD:', imageRecord)
+
       const { error: dbError } = await supabase
         .from('imagenes')
-        .insert({
-          nombre: file.name,
-          tipo: file.type,
-          tamaño: file.size,
-          url: publicUrl,
-          caso_id: id,
-          user_id: user.id
-        })
+        .insert(imageRecord)
 
-      if (dbError) throw dbError
+      if (dbError) {
+        console.error('❌ Error guardando en BD:', dbError)
+        // Try to clean up the uploaded file
+        await supabase.storage.from('imagenes').remove([fileName])
+        throw new Error('Error al guardar imagen en base de datos: ' + dbError.message)
+      }
 
+      console.log('✅ Imagen guardada exitosamente en BD')
       await fetchImagenes()
+      
+      // Clear the input
+      if (event.target) {
+        event.target.value = ''
+      }
+      
     } catch (error) {
-      console.error('Error uploading image:', error)
-      alert('Error al subir la imagen')
+      console.error('💥 Error completo al subir imagen:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido al subir imagen'
+      alert(errorMessage)
     } finally {
       setUploadingImage(false)
     }
@@ -578,7 +646,8 @@ export function CasoDetalle() {
           descripcion: editForm.descripcion,
           estado: editForm.estado,
           prioridad: editForm.prioridad,
-          fecha_vencimiento: editForm.fecha_vencimiento || null
+          fecha_vencimiento: editForm.fecha_vencimiento || null,
+          cliente_id: editForm.cliente_id || null
         })
         .eq('id', id)
         .eq('user_id', user.id)
@@ -589,6 +658,57 @@ export function CasoDetalle() {
       setIsEditOpen(false)
     } catch (error) {
       console.error('Error updating caso:', error)
+    }
+  }
+
+  const deleteCaso = async () => {
+    if (!user || !id || isExampleCase) return
+
+    if (!confirm('¿Estás seguro de que quieres eliminar este caso? Esta acción eliminará también todos sus documentos, notas e imágenes asociadas.')) return
+
+    try {
+      // Eliminar documentos asociados del storage
+      if (documentos.length > 0) {
+        for (const doc of documentos) {
+          if (doc.url.includes('supabase')) {
+            const fileName = doc.url.split('/').pop()
+            if (fileName) {
+              await supabase.storage
+                .from('documentos')
+                .remove([`${user.id}/${fileName}`])
+            }
+          }
+        }
+      }
+
+      // Eliminar imágenes asociadas del storage
+      if (imagenes.length > 0) {
+        for (const img of imagenes) {
+          if (img.url.includes('supabase')) {
+            const fileName = img.url.split('/').pop()
+            if (fileName) {
+              await supabase.storage
+                .from('imagenes')
+                .remove([`${user.id}/casos/${id}/${fileName}`])
+            }
+          }
+        }
+      }
+
+      // Eliminar el caso de la base de datos (cascade eliminará notas, documentos e imágenes)
+      const { error: deleteError } = await supabase
+        .from('casos')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user.id)
+
+      if (deleteError) throw deleteError
+
+      // Redirigir a la lista de casos
+      window.location.href = '/casos'
+    } catch (error) {
+      console.error('Error deleting caso:', error)
+      alert('Error al eliminar el caso')
     }
   }
 
@@ -683,6 +803,108 @@ export function CasoDetalle() {
   const openNoteViewer = (nota: Nota) => {
     setSelectedNote(nota)
     setIsNoteViewerOpen(true)
+  }
+
+  const setupImageStorage = async () => {
+    if (!user) return
+    
+    setIsSetupLoading(true)
+    try {
+      const result = await ImageStorageSetup.ensureImagesBucketExists()
+      
+      if (result.success) {
+        // Probar la subida
+        const testResult = await ImageStorageSetup.testImageUpload(user.id)
+        alert(result.message + '\n\n' + testResult.message)
+      } else {
+        // Si falla, mostrar instrucciones específicas
+        if (result.message.includes('tabla')) {
+          // Problema con la tabla
+          const shouldApply = confirm(result.message + '\n\n¿Quieres que intente aplicar la migración automáticamente?')
+          if (shouldApply) {
+            await applyImagesMigration()
+          }
+        } else {
+          alert(result.message)
+        }
+      }
+    } catch (error) {
+      console.error('Error configurando almacenamiento:', error)
+      alert('Error al configurar almacenamiento: ' + (error instanceof Error ? error.message : 'Error desconocido'))
+    } finally {
+      setIsSetupLoading(false)
+    }
+  }
+
+  const applyImagesMigration = async () => {
+    try {
+      setIsSetupLoading(true)
+      console.log('📝 Aplicando migración de tabla imágenes...')
+      
+      // Ejecutar la migración SQL directamente
+      const migrationSQL = `
+        -- Crear tabla de imágenes
+        CREATE TABLE IF NOT EXISTS imagenes (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          nombre text NOT NULL,
+          tipo text,
+          tamaño bigint,
+          url text NOT NULL,
+          caso_id uuid REFERENCES casos(id) ON DELETE CASCADE,
+          nota_id uuid REFERENCES notas(id) ON DELETE CASCADE,
+          user_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          created_at timestamptz DEFAULT now(),
+          updated_at timestamptz DEFAULT now()
+        );
+
+        -- Habilitar RLS en la tabla de imágenes
+        ALTER TABLE imagenes ENABLE ROW LEVEL SECURITY;
+
+        -- Políticas RLS para imágenes
+        DROP POLICY IF EXISTS "Users can manage own images" ON imagenes;
+        CREATE POLICY "Users can manage own images"
+          ON imagenes
+          FOR ALL
+          TO authenticated
+          USING (user_id = auth.uid())
+          WITH CHECK (user_id = auth.uid());
+
+        -- Trigger para updated_at
+        DROP TRIGGER IF EXISTS imagenes_updated_at ON imagenes;
+        CREATE TRIGGER imagenes_updated_at
+          BEFORE UPDATE ON imagenes
+          FOR EACH ROW
+          EXECUTE FUNCTION handle_updated_at();
+
+        -- Índices para performance
+        CREATE INDEX IF NOT EXISTS idx_imagenes_user_id ON imagenes(user_id);
+        CREATE INDEX IF NOT EXISTS idx_imagenes_caso_id ON imagenes(caso_id);
+        CREATE INDEX IF NOT EXISTS idx_imagenes_nota_id ON imagenes(nota_id);
+        CREATE INDEX IF NOT EXISTS idx_imagenes_created_at ON imagenes(created_at DESC);
+      `
+      
+      // Ejecutar la migración usando supabase.rpc si existe una función para ello
+      // Si no, mostrar instrucciones
+      alert(`❌ No se puede aplicar la migración automáticamente.
+
+🔧 SOLUCIÓN MANUAL:
+
+1. Ve a tu panel de Supabase → SQL Editor
+2. Ejecuta esta migración:
+
+${migrationSQL}
+
+3. O desde terminal:
+   npx supabase db reset
+
+4. Después haz clic en el botón "🔧 Config" nuevamente`)
+      
+    } catch (error) {
+      console.error('Error aplicando migración:', error)
+      alert('Error aplicando migración: ' + (error instanceof Error ? error.message : 'Error desconocido'))
+    } finally {
+      setIsSetupLoading(false)
+    }
   }
 
   // Filter notes based on search and tags
@@ -819,6 +1041,23 @@ export function CasoDetalle() {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Cliente (opcional)</Label>
+                  <Select value={editForm.cliente_id || "none"} onValueChange={(value) => setEditForm(prev => ({ ...prev, cliente_id: value === "none" ? "" : value }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccionar cliente..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sin cliente asignado</SelectItem>
+                      {clientes.map((cliente) => (
+                        <SelectItem key={cliente.id} value={cliente.id}>
+                          {cliente.nombre} {cliente.email && `(${cliente.email})`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setIsEditOpen(false)}>
                     Cancelar
@@ -830,6 +1069,14 @@ export function CasoDetalle() {
               </div>
             </DialogContent>
           </Dialog>
+          <Button 
+            variant="destructive" 
+            onClick={deleteCaso}
+            disabled={isExampleCase}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Eliminar Caso
+          </Button>
         </div>
       </div>
 
@@ -1006,6 +1253,15 @@ export function CasoDetalle() {
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={setupImageStorage}
+                    disabled={isSetupLoading}
+                    title="Configurar almacenamiento de imágenes"
+                  >
+                    {isSetupLoading ? '⚙️' : '🔧'}
+                    {isSetupLoading ? ' Configurando...' : ' Config'}
+                  </Button>
                   <input
                     type="file"
                     id="image-upload"

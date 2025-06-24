@@ -57,6 +57,8 @@ export function ContextSelector({
   }, [isOpen, user])
 
   const fetchData = async () => {
+    if (!user) return
+    
     setLoading(true)
     try {
       // Fetch documents
@@ -82,8 +84,16 @@ export function ContextSelector({
 
       if (casesError) throw casesError
 
+      // Fix the cliente type issue
+      const formattedCases = (casesData || []).map(caso => ({
+        ...caso,
+        cliente: Array.isArray(caso.cliente) && caso.cliente.length > 0 
+          ? caso.cliente[0] 
+          : undefined
+      }))
+
       setDocuments(docsData || [])
-      setCases(casesData || [])
+      setCases(formattedCases)
     } catch (error) {
       console.error('Error fetching context data:', error)
     } finally {
@@ -109,7 +119,20 @@ export function ContextSelector({
   }
 
   const selectCase = (caseId: string) => {
-    onCaseChange(selectedCase === caseId ? null : caseId)
+    const newSelectedCase = selectedCase === caseId ? null : caseId
+    onCaseChange(newSelectedCase)
+    
+    if (newSelectedCase) {
+      const caseDocuments = documents.filter(doc => doc.caso_id === newSelectedCase)
+      const caseDocumentIds = caseDocuments.map(doc => doc.id)
+      
+      const uniqueDocumentIds = Array.from(new Set([...selectedDocuments, ...caseDocumentIds]))
+      onDocumentsChange(uniqueDocumentIds)
+      
+      console.log(`📁 Caso seleccionado: ${cases.find(c => c.id === newSelectedCase)?.titulo}`)
+      console.log(`📄 Documentos del caso cargados automáticamente: ${caseDocuments.length}`)
+      caseDocuments.forEach(doc => console.log(`  - ${doc.nombre}`))
+    }
   }
 
   const clearAll = () => {
@@ -123,11 +146,15 @@ export function ContextSelector({
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="relative">
-          <FileText className="h-4 w-4 mr-2" />
+        <Button 
+          variant="outline" 
+          size="sm" 
+          className="relative group-hover:scale-105 group-hover:shadow-md transition-all duration-200 ease-in-out"
+        >
+          <FileText className="h-4 w-4 mr-2 group-hover:text-blue transition-colors duration-200" />
           Contexto
           {(selectedDocsCount > 0 || hasSelectedCase) && (
-            <Badge variant="secondary" className="ml-2 h-5 w-5 p-0 text-xs">
+            <Badge variant="secondary" className="ml-2 h-5 w-5 p-0 text-xs group-hover:bg-blue group-hover:text-white transition-colors duration-200">
               {selectedDocsCount + (hasSelectedCase ? 1 : 0)}
             </Badge>
           )}
@@ -145,9 +172,14 @@ export function ContextSelector({
               </Button>
             )}
           </div>
-          <p className="text-sm text-subtext0">
-            Selecciona documentos y/o un caso para proporcionar contexto a la IA
-          </p>
+          <div className="space-y-1">
+            <p className="text-sm text-subtext0">
+              Selecciona documentos y/o un caso para proporcionar contexto a la IA
+            </p>
+            <p className="text-xs text-blue bg-blue/10 px-2 py-1 rounded">
+              💡 Al seleccionar un caso, todos sus documentos se incluyen automáticamente como contexto
+            </p>
+          </div>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -170,18 +202,25 @@ export function ContextSelector({
               </CardHeader>
               <CardContent className="space-y-2">
                 {hasSelectedCase && (
-                  <div className="flex items-center gap-2">
-                    <Briefcase className="h-4 w-4 text-blue" />
-                    <span className="text-sm">
-                      Caso: {cases.find(c => c.id === selectedCase)?.titulo}
-                    </span>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="h-4 w-4 text-blue" />
+                      <span className="text-sm font-medium">
+                        Caso: {cases.find(c => c.id === selectedCase)?.titulo}
+                      </span>
+                    </div>
+                    {documents.filter(doc => doc.caso_id === selectedCase).length > 0 && (
+                      <div className="ml-6 text-xs text-subtext0">
+                        ✨ Incluye automáticamente {documents.filter(doc => doc.caso_id === selectedCase).length} documento{documents.filter(doc => doc.caso_id === selectedCase).length > 1 ? 's' : ''} del caso
+                      </div>
+                    )}
                   </div>
                 )}
                 {selectedDocsCount > 0 && (
                   <div className="flex items-center gap-2">
                     <FileText className="h-4 w-4 text-green" />
                     <span className="text-sm">
-                      {selectedDocsCount} documento{selectedDocsCount > 1 ? 's' : ''} seleccionado{selectedDocsCount > 1 ? 's' : ''}
+                      {selectedDocsCount} documento{selectedDocsCount > 1 ? 's' : ''} en total
                     </span>
                   </div>
                 )}

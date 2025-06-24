@@ -1,15 +1,35 @@
 import { supabase } from './supabase'
+import { TextExtractionService } from './textExtraction'
 
 export class StorageService {
   static async uploadDocument(file: File, userId: string, folder?: string): Promise<{
     url: string
     path: string
+    contenido?: string
     error?: string
   }> {
     try {
       // Validate file size (50MB max)
       if (file.size > 50 * 1024 * 1024) {
         throw new Error('El archivo es demasiado grande. Máximo 50MB.')
+      }
+
+      // Extract text from the file before uploading
+      console.log('🔍 Starting text extraction for:', file.name, file.type)
+      let extractedText = ''
+      try {
+        if (TextExtractionService.isTextExtractable(file)) {
+          console.log('📄 File is extractable, extracting text...')
+          extractedText = await TextExtractionService.extractTextFromFile(file)
+          console.log('✅ Text extracted successfully. Length:', extractedText.length, 'characters')
+          console.log('📋 First 200 chars:', extractedText.substring(0, 200))
+        } else {
+          console.log('❌ File type not supported for text extraction:', file.type)
+          extractedText = `Archivo: ${file.name}\nTipo: ${file.type}\nTamaño: ${this.formatFileSize(file.size)}\n\nEste tipo de archivo no soporta extracción automática de texto.`
+        }
+      } catch (textError) {
+        console.error('❌ Error extracting text:', textError)
+        extractedText = `Error al extraer texto del archivo: ${file.name}\nTipo: ${file.type}\nTamaño: ${this.formatFileSize(file.size)}\nError: ${textError instanceof Error ? textError.message : 'Error desconocido'}`
       }
 
       // Create a unique file path
@@ -19,6 +39,7 @@ export class StorageService {
       const fileName = `${userId}/${folder ? folder + '/' : ''}${timestamp}-${sanitizedName}`
 
       // Upload file to Supabase Storage
+      console.log('☁️ Uploading file to storage...')
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('documentos')
         .upload(fileName, file, {
@@ -27,7 +48,7 @@ export class StorageService {
         })
 
       if (uploadError) {
-        console.error('Upload error:', uploadError)
+        console.error('❌ Upload error:', uploadError)
         throw uploadError
       }
 
@@ -36,12 +57,16 @@ export class StorageService {
         .from('documentos')
         .getPublicUrl(fileName)
 
+      console.log('✅ File uploaded successfully:', publicUrl)
+      console.log('📝 Extracted content length:', extractedText.length)
+
       return {
         url: publicUrl,
-        path: fileName
+        path: fileName,
+        contenido: extractedText
       }
     } catch (error) {
-      console.error('Error in uploadDocument:', error)
+      console.error('❌ Error in uploadDocument:', error)
       return {
         url: '',
         path: '',
@@ -197,5 +222,12 @@ export class StorageService {
       console.error('Error getting file info:', error)
       return null
     }
+  }
+
+  private static formatFileSize(bytes: number): string {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    if (bytes === 0) return '0 Bytes'
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i]
   }
 }
