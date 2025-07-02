@@ -2,6 +2,142 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Estilos para react-image-crop */
+.ReactCrop {
+  position: relative;
+  display: inline-block;
+  cursor: crosshair;
+  max-width: 100%;
+  background-color: #000;
+}
+
+.ReactCrop * {
+  box-sizing: border-box;
+}
+
+.ReactCrop__image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.ReactCrop__crop-selection {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate3d(0, 0, 0);
+  box-sizing: border-box;
+  cursor: move;
+  box-shadow: 0 0 0 9999em rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.ReactCrop__crop-selection:focus {
+  outline: none;
+}
+
+.ReactCrop__drag-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background-color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  box-sizing: border-box;
+  outline: 1px solid transparent;
+}
+
+.ReactCrop__drag-handle::after {
+  position: absolute;
+  display: block;
+  width: 100%;
+  height: 100%;
+  content: '';
+  cursor: inherit;
+}
+
+.ReactCrop__drag-handle--ne {
+  top: -6px;
+  right: -6px;
+  cursor: ne-resize;
+}
+
+.ReactCrop__drag-handle--se {
+  bottom: -6px;
+  right: -6px;
+  cursor: se-resize;
+}
+
+.ReactCrop__drag-handle--sw {
+  bottom: -6px;
+  left: -6px;
+  cursor: sw-resize;
+}
+
+.ReactCrop__drag-handle--nw {
+  top: -6px;
+  left: -6px;
+  cursor: nw-resize;
+}
+
+.ReactCrop__drag-handle--n {
+  top: -6px;
+  left: 50%;
+  margin-left: -6px;
+  cursor: n-resize;
+}
+
+.ReactCrop__drag-handle--e {
+  top: 50%;
+  right: -6px;
+  margin-top: -6px;
+  cursor: e-resize;
+}
+
+.ReactCrop__drag-handle--s {
+  bottom: -6px;
+  left: 50%;
+  margin-left: -6px;
+  cursor: s-resize;
+}
+
+.ReactCrop__drag-handle--w {
+  top: 50%;
+  left: -6px;
+  margin-top: -6px;
+  cursor: w-resize;
+}
+
+.ReactCrop--disabled .ReactCrop__drag-handle {
+  cursor: inherit;
+}
+
+.ReactCrop--circular .ReactCrop__crop-selection {
+  border-radius: 50%;
+}
+
+.ReactCrop--rule-of-thirds .ReactCrop__crop-selection::before,
+.ReactCrop--rule-of-thirds .ReactCrop__crop-selection::after {
+  content: '';
+  position: absolute;
+  background-color: rgba(255, 255, 255, 0.4);
+}
+
+.ReactCrop--rule-of-thirds .ReactCrop__crop-selection::before {
+  width: 100%;
+  height: 1px;
+  top: 33.333333%;
+  left: 0;
+  box-shadow: 0 66.666667% 0 0 rgba(255, 255, 255, 0.4);
+}
+
+.ReactCrop--rule-of-thirds .ReactCrop__crop-selection::after {
+  width: 1px;
+  height: 100%;
+  top: 0;
+  left: 33.333333%;
+  box-shadow: 66.666667% 0 0 0 rgba(255, 255, 255, 0.4);
+}
+
 @layer base {
   :root {
     --background: 222.2 84% 4.9%;

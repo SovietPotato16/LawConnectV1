@@ -10,7 +10,8 @@ import {
   ExternalLink,
   CheckCircle,
   XCircle,
-  Settings
+  Settings,
+  AlertCircle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +20,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { ImageCropper } from '@/components/ImageCropper'
+import { AvatarSetup } from '@/lib/avatarSetup'
 import { useAuth } from '@/hooks/useAuth'
 import { useProfile } from '@/hooks/useProfile'
 import { useGoogleCalendar } from '@/hooks/useGoogleCalendar'
@@ -26,7 +29,7 @@ import { supabase } from '@/lib/supabase'
 
 export function Configuracion() {
   const { user } = useAuth()
-  const { profile, updateProfile, getInitials, getFullName } = useProfile()
+  const { profile, updateProfile, updateAvatar, getInitials, getFullName } = useProfile()
   const { isConnected, loading: calendarLoading, connect, disconnect } = useGoogleCalendar()
   
   const [profileForm, setProfileForm] = useState({
@@ -48,9 +51,16 @@ export function Configuracion() {
   const [loading, setLoading] = useState({
     profile: false,
     password: false,
-    avatar: false
+    avatar: false,
+    setup: false
   })
-  const [avatarUrl, setAvatarUrl] = useState<string>('')
+  // Estado para el recortador de imágenes
+  const [cropperState, setCropperState] = useState({
+    isOpen: false,
+    imageSrc: ''
+  })
+  // Estado para mostrar resultado de configuración
+  const [setupResult, setSetupResult] = useState<{ success: boolean; message: string; details: string[] } | null>(null)
 
   useEffect(() => {
     if (profile) {
@@ -62,6 +72,12 @@ export function Configuracion() {
       })
     }
   }, [profile])
+
+  // Obtener la URL del avatar desde el perfil
+  const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now())
+  const avatarUrl = (profile as any)?.avatar_url 
+    ? `${(profile as any).avatar_url}?t=${avatarTimestamp}` 
+    : ''
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -115,37 +131,98 @@ export function Configuracion() {
     }
   }
 
+  // Manejar selección de archivo para recorte
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file || !user) return
 
+    console.log('📁 Archivo seleccionado:', {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      sizeInMB: (file.size / (1024 * 1024)).toFixed(2)
+    })
+
+    // Validar que sea una imagen
+    if (!file.type.startsWith('image/')) {
+      alert('❌ Solo se permiten archivos de imagen (PNG, JPG, JPEG, WebP)')
+      return
+    }
+
+    // Validar tamaño de archivo (máximo 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('❌ El archivo es demasiado grande. Máximo 5MB.\n\n📏 Tu archivo: ' + (file.size / (1024 * 1024)).toFixed(2) + 'MB')
+      return
+    }
+
+    try {
+      // Crear URL temporal para mostrar en el recortador
+      const imageUrl = URL.createObjectURL(file)
+      console.log('🔗 URL temporal creada para el recortador')
+      
+      setCropperState({
+        isOpen: true,
+        imageSrc: imageUrl
+      })
+
+      // Limpiar el input
+      event.target.value = ''
+    } catch (error) {
+      console.error('❌ Error procesando archivo:', error)
+      alert('Error al procesar el archivo seleccionado')
+    }
+  }
+
+  // Manejar el resultado del recorte
+  const handleCropComplete = async (croppedImageBlob: Blob) => {
     setLoading(prev => ({ ...prev, avatar: true }))
 
     try {
-      // Upload avatar to Supabase Storage with user ID as folder name
-      const fileExt = file.name.split('.').pop()
-      const fileName = `avatar.${fileExt}`
-      const filePath = `${user.id}/${fileName}`
+      console.log('🖼️ Procesando imagen recortada...', {
+        size: croppedImageBlob.size,
+        type: croppedImageBlob.type
+      })
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file, { upsert: true })
+      // Usar la función updateAvatar del hook useProfile
+      const result = await updateAvatar(croppedImageBlob)
+      
+      if (result.error) {
+        throw result.error
+      }
 
-      if (uploadError) throw uploadError
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath)
-
-      setAvatarUrl(publicUrl)
+      console.log('✅ Avatar actualizado exitosamente:', result.url)
+      
+      // Actualizar el timestamp para forzar recarga de la imagen
+      const newTimestamp = Date.now()
+      setAvatarTimestamp(newTimestamp)
+      
       alert('Foto de perfil actualizada correctamente')
+      
+      // Refrescar el perfil después de un momento para asegurar que se vea la actualización
+      setTimeout(() => {
+        window.location.reload()
+      }, 2000)
+      
     } catch (error) {
-      console.error('Error uploading avatar:', error)
-      alert('Error al subir la foto de perfil')
+      console.error('❌ Error completo al actualizar avatar:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido al actualizar la foto de perfil'
+      alert(`Error: ${errorMessage}\n\n💡 Intenta usar el botón "Configurar Sistema" si es la primera vez que subes una foto.`)
     } finally {
       setLoading(prev => ({ ...prev, avatar: false }))
+      // Limpiar la URL temporal
+      if (cropperState.imageSrc) {
+        URL.revokeObjectURL(cropperState.imageSrc)
+      }
+      setCropperState({ isOpen: false, imageSrc: '' })
     }
+  }
+
+  // Cerrar el recortador
+  const handleCropperClose = () => {
+    if (cropperState.imageSrc) {
+      URL.revokeObjectURL(cropperState.imageSrc)
+    }
+    setCropperState({ isOpen: false, imageSrc: '' })
   }
 
   const handleGoogleCalendarToggle = async () => {
@@ -159,6 +236,28 @@ export function Configuracion() {
     } catch (error) {
       console.error('Error toggling Google Calendar:', error)
       alert('Error al gestionar la conexión con Google Calendar')
+    }
+  }
+
+  // Configurar sistema de avatares
+  const handleAvatarSetup = async () => {
+    if (!user) return
+
+    setLoading(prev => ({ ...prev, setup: true }))
+    setSetupResult(null)
+
+    try {
+      const result = await AvatarSetup.setupComplete()
+      setSetupResult(result)
+    } catch (error) {
+      console.error('Error en configuración:', error)
+      setSetupResult({
+        success: false,
+        message: 'Error durante la configuración',
+        details: [error instanceof Error ? error.message : 'Error desconocido']
+      })
+    } finally {
+      setLoading(prev => ({ ...prev, setup: false }))
     }
   }
 
@@ -200,7 +299,7 @@ export function Configuracion() {
                   </AvatarFallback>
                 </Avatar>
                 
-                <div>
+                <div className="space-y-2">
                   <input
                     type="file"
                     id="avatar-upload"
@@ -217,7 +316,46 @@ export function Configuracion() {
                     <Camera className="h-4 w-4 mr-2" />
                     {loading.avatar ? 'Subiendo...' : 'Cambiar foto'}
                   </Button>
+                  
+                  {/* Botón de configuración si es necesario */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAvatarSetup}
+                    disabled={loading.setup}
+                    className="w-full"
+                  >
+                    <Settings className="h-4 w-4 mr-2" />
+                    {loading.setup ? 'Configurando...' : 'Configurar Sistema'}
+                  </Button>
                 </div>
+
+                {/* Mostrar resultado de configuración */}
+                {setupResult && (
+                  <div className={`mt-4 p-3 rounded-lg border ${
+                    setupResult.success 
+                      ? 'bg-green/10 border-green/20 text-green' 
+                      : 'bg-red/10 border-red/20 text-red'
+                  }`}>
+                    <div className="flex items-center gap-2 font-medium text-sm">
+                      {setupResult.success ? (
+                        <CheckCircle className="h-4 w-4" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4" />
+                      )}
+                      {setupResult.message}
+                    </div>
+                    {setupResult.details && setupResult.details.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {setupResult.details.map((detail, index) => (
+                          <div key={index} className="text-xs whitespace-pre-line">
+                            {detail}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -537,6 +675,15 @@ export function Configuracion() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Componente de recorte de imagen */}
+      <ImageCropper
+        src={cropperState.imageSrc}
+        isOpen={cropperState.isOpen}
+        onClose={handleCropperClose}
+        onCropComplete={handleCropComplete}
+        aspectRatio={1} // Relación 1:1 para foto de perfil circular
+      />
     </div>
   )
 }

@@ -108,6 +108,85 @@ export function useProfile() {
     }
   }
 
+  const updateAvatar = async (avatarBlob: Blob): Promise<{ error?: Error; url?: string }> => {
+    if (!user) return { error: new Error('No hay usuario logueado') }
+
+    try {
+      console.log('🔄 Iniciando subida de avatar...')
+      
+      // Verificar si el bucket 'avatars' existe
+      const { data: buckets, error: bucketsError } = await supabase.storage.listBuckets()
+      
+      if (bucketsError) {
+        console.error('❌ Error verificando buckets:', bucketsError)
+        throw new Error(`Error verificando almacenamiento: ${bucketsError.message}`)
+      }
+      
+      const avatarBucket = buckets?.find(bucket => bucket.name === 'avatars')
+      if (!avatarBucket) {
+        console.error('❌ Bucket "avatars" no encontrado')
+        throw new Error('El bucket de avatars no está configurado. Usa el botón "Configurar Sistema" primero.')
+      }
+
+      // Crear nombre único para el archivo del avatar
+      const fileExt = 'jpg' // Siempre guardar como JPG por consistencia
+      const fileName = `avatar.${fileExt}`
+      const filePath = `${user.id}/${fileName}`
+
+      console.log('📤 Subiendo avatar a:', filePath)
+
+      // Subir avatar al bucket 'avatars' en Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, avatarBlob, { 
+          upsert: true, // Sobrescribir avatar existente
+          contentType: 'image/jpeg'
+        })
+
+      if (uploadError) {
+        console.error('❌ Error subiendo avatar:', uploadError)
+        throw new Error(`Error subiendo imagen: ${uploadError.message}`)
+      }
+
+      // Obtener URL pública del avatar
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath)
+
+      console.log('🔗 URL pública generada:', publicUrl)
+
+      // Intentar actualizar el campo avatar_url en la tabla profiles
+      // Si la columna no existe, simplemente guardar en el estado local
+      try {
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update({ avatar_url: publicUrl })
+          .eq('id', user.id)
+
+        if (updateError) {
+          console.warn('⚠️ No se pudo actualizar avatar_url en la tabla (probablemente la columna no existe):', updateError)
+          // Continuar sin error - guardaremos solo en el estado local
+        } else {
+          console.log('✅ Avatar_url actualizado en la tabla profiles')
+        }
+      } catch (dbError) {
+        console.warn('⚠️ Error actualizando base de datos (continuando con estado local):', dbError)
+      }
+
+      // Actualizar el estado local del perfil
+      if (profile) {
+        setProfile({ ...profile, avatar_url: publicUrl } as Profile & { avatar_url: string })
+      }
+
+      console.log('✅ Avatar actualizado exitosamente')
+      return { url: publicUrl }
+    } catch (error) {
+      console.error('❌ Error completo actualizando avatar:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido actualizando avatar'
+      return { error: new Error(errorMessage) }
+    }
+  }
+
   const getInitials = () => {
     if (!profile) return 'U'
     return `${profile.nombre[0]}${profile.apellido[0]}`.toUpperCase()
@@ -122,6 +201,7 @@ export function useProfile() {
     profile,
     loading,
     updateProfile,
+    updateAvatar,
     getInitials,
     getFullName,
     refetch: fetchProfile,
