@@ -5,6 +5,13 @@ import { Layout } from '@/components/layout/Layout'
 import { Landing } from '@/pages/Landing'
 import { Login } from '@/pages/Login'
 import { Register } from '@/pages/Register'
+import { ForgotPassword } from '@/pages/ForgotPassword'
+import { ResetPassword } from '@/pages/ResetPassword'
+import { ConfirmEmail } from '@/pages/ConfirmEmail'
+import { TestAuth } from '@/pages/TestAuth'
+import { TestEmail } from '@/pages/TestEmail'
+import { CalendarCallback } from '@/pages/CalendarCallback'
+import { GoogleCalendarDiagnostic } from '@/pages/GoogleCalendarDiagnostic'
 import { Dashboard } from '@/pages/Dashboard'
 import { Casos } from '@/pages/Casos'
 import { CasoDetalle } from '@/pages/CasoDetalle'
@@ -92,6 +99,17 @@ function App() {
                 <Register />
               </PublicRoute>
             } />
+            <Route path="/forgot-password" element={
+              <PublicRoute>
+                <ForgotPassword />
+              </PublicRoute>
+            } />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/confirm-email" element={<ConfirmEmail />} />
+            <Route path="/test-auth" element={<TestAuth />} />
+            <Route path="/test-email" element={<TestEmail />} />
+            <Route path="/calendar/callback" element={<CalendarCallback />} />
+            <Route path="/google-calendar-diagnostic" element={<GoogleCalendarDiagnostic />} />
             
             {/* Protected routes */}
             <Route path="/dashboard" element={

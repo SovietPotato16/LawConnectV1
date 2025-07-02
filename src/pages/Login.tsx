@@ -122,6 +122,15 @@ export function Login() {
               </div>
             )}
 
+            <div className="text-right">
+              <Link 
+                to="/forgot-password" 
+                className="text-sm text-blue hover:underline"
+              >
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </div>
+
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? (
                 <>

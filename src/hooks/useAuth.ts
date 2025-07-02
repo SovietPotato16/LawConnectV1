@@ -56,7 +56,8 @@ export function useAuth() {
         email,
         password,
         options: {
-          data: metadata
+          data: metadata,
+          emailRedirectTo: `${window.location.origin}/confirm-email`
         }
       })
       return { data, error }
@@ -76,11 +77,54 @@ export function useAuth() {
     }
   }
 
+  const resetPassword = async (email: string) => {
+    try {
+      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`
+      })
+      return { data, error }
+    } catch (error) {
+      console.error('Reset password error:', error)
+      return { data: null, error: error as Error }
+    }
+  }
+
+  const updatePassword = async (newPassword: string) => {
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        password: newPassword
+      })
+      return { data, error }
+    } catch (error) {
+      console.error('Update password error:', error)
+      return { data: null, error: error as Error }
+    }
+  }
+
+  const resendConfirmation = async (email: string) => {
+    try {
+      const { data, error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/confirm-email`
+        }
+      })
+      return { data, error }
+    } catch (error) {
+      console.error('Resend confirmation error:', error)
+      return { data: null, error: error as Error }
+    }
+  }
+
   return {
     user,
     loading,
     signIn,
     signUp,
     signOut,
+    resetPassword,
+    updatePassword,
+    resendConfirmation,
   }
 }

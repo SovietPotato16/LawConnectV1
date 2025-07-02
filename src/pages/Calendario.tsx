@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Calendar, Plus, Settings, ExternalLink, AlertCircle } from 'lucide-react'
+import { Calendar, Plus, Settings, ExternalLink, AlertCircle, Edit, Trash2, RefreshCw, Clock, MapPin } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +13,7 @@ import type { CalendarEvent } from '@/lib/googleCalendar'
 
 export function Calendario() {
   const [isCreateEventOpen, setIsCreateEventOpen] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
   const [newEvent, setNewEvent] = useState({
     summary: '',
     description: '',
@@ -29,6 +30,8 @@ export function Calendario() {
     disconnect,
     fetchEvents,
     createEvent,
+    updateEvent,
+    deleteEvent,
   } = useGoogleCalendar()
 
   useEffect(() => {
@@ -37,7 +40,8 @@ export function Calendario() {
     }
   }, [isConnected])
 
-  const handleCreateEvent = async () => {
+  // Función para crear o actualizar evento
+  const handleSaveEvent = async () => {
     if (!newEvent.summary || !newEvent.start || !newEvent.end) return
 
     try {
@@ -55,18 +59,56 @@ export function Calendario() {
         location: newEvent.location,
       }
 
-      await createEvent(event)
-      setIsCreateEventOpen(false)
-      setNewEvent({
-        summary: '',
-        description: '',
-        start: '',
-        end: '',
-        location: '',
-      })
+      if (editingEvent?.id) {
+        // Actualizar evento existente
+        await updateEvent(editingEvent.id, event)
+      } else {
+        // Crear nuevo evento
+        await createEvent(event)
+      }
+
+      // Limpiar formulario y cerrar modal
+      handleCloseModal()
     } catch (error) {
-      console.error('Error creating event:', error)
+      console.error('Error saving event:', error)
     }
+  }
+
+  // Función para abrir modal de edición
+  const handleEditEvent = (event: CalendarEvent) => {
+    setEditingEvent(event)
+    setNewEvent({
+      summary: event.summary || '',
+      description: event.description || '',
+      start: new Date(event.start.dateTime).toISOString().slice(0, 16),
+      end: new Date(event.end.dateTime).toISOString().slice(0, 16),
+      location: event.location || '',
+    })
+    setIsCreateEventOpen(true)
+  }
+
+  // Función para eliminar evento
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!confirm('¿Estás seguro de que quieres eliminar este evento?')) return
+
+    try {
+      await deleteEvent(eventId)
+    } catch (error) {
+      console.error('Error deleting event:', error)
+    }
+  }
+
+  // Función para cerrar modal y limpiar estado
+  const handleCloseModal = () => {
+    setIsCreateEventOpen(false)
+    setEditingEvent(null)
+    setNewEvent({
+      summary: '',
+      description: '',
+      start: '',
+      end: '',
+      location: '',
+    })
   }
 
   if (loading) {
@@ -97,7 +139,9 @@ export function Calendario() {
                 </DialogTrigger>
                 <DialogContent className="max-w-md">
                   <DialogHeader>
-                    <DialogTitle>Crear nueva cita</DialogTitle>
+                    <DialogTitle>
+                      {editingEvent ? 'Editar cita' : 'Crear nueva cita'}
+                    </DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4">
                     <div className="space-y-2">
@@ -153,14 +197,14 @@ export function Calendario() {
                     </div>
 
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" onClick={() => setIsCreateEventOpen(false)}>
+                      <Button variant="outline" onClick={handleCloseModal}>
                         Cancelar
                       </Button>
                       <Button 
-                        onClick={handleCreateEvent}
+                        onClick={handleSaveEvent}
                         disabled={!newEvent.summary || !newEvent.start || !newEvent.end}
                       >
-                        Crear Cita
+                        {editingEvent ? 'Actualizar Cita' : 'Crear Cita'}
                       </Button>
                     </div>
                   </div>
@@ -263,21 +307,51 @@ export function Calendario() {
                 ) : (
                   <div className="space-y-4">
                     {events.slice(0, 10).map((event) => (
-                      <div key={event.id} className="flex items-start gap-3 p-3 bg-surface1 rounded-lg">
+                      <div key={event.id} className="group relative flex items-start gap-3 p-4 bg-surface1 rounded-lg hover:bg-surface2 transition-colors">
                         <div className="flex items-center justify-center w-10 h-10 bg-blue rounded-lg">
                           <Calendar className="h-5 w-5 text-base" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-text truncate">{event.summary}</h4>
                           {event.description && (
-                            <p className="text-sm text-subtext0 line-clamp-2">{event.description}</p>
+                            <p className="text-sm text-subtext0 line-clamp-2 mt-1">{event.description}</p>
                           )}
                           <div className="flex items-center gap-4 mt-2 text-xs text-subtext0">
-                            <span>{formatDateTime(event.start.dateTime)}</span>
-                            {event.location && <span>📍 {event.location}</span>}
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              <span>{formatDateTime(event.start.dateTime)}</span>
+                            </div>
+                            {event.location && (
+                              <div className="flex items-center gap-1">
+                                <MapPin className="h-3 w-3" />
+                                <span className="truncate">{event.location}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
-                        <Badge variant="outline">Google</Badge>
+                        
+                        {/* Botones de acción */}
+                        <div className="flex items-center gap-1">
+                          <Badge variant="outline" className="text-xs">Google</Badge>
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 ml-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleEditEvent(event)}
+                              className="h-8 w-8 p-0"
+                            >
+                              <Edit className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => event.id && handleDeleteEvent(event.id)}
+                              className="h-8 w-8 p-0 text-red hover:text-red hover:bg-red/10"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -331,8 +405,16 @@ export function Calendario() {
                     className="w-full justify-start"
                     onClick={() => fetchEvents()}
                   >
-                    <Calendar className="h-4 w-4 mr-2" />
+                    <RefreshCw className="h-4 w-4 mr-2" />
                     Sincronizar eventos
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full justify-start"
+                    onClick={() => window.open('https://calendar.google.com', '_blank')}
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Abrir Google Calendar
                   </Button>
                 </div>
               </CardContent>

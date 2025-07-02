@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from './useAuth'
+import { supabase } from '@/lib/supabase'
 import { GoogleCalendarService, storeGoogleTokens, getGoogleTokens, ensureValidTokens, type CalendarEvent } from '@/lib/googleCalendar'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''

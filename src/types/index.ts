@@ -200,3 +200,22 @@ export interface ChatMessage {
   timestamp: Date
   documentContext?: string[]
 }
+
+export interface Factura {
+  id: string
+  user_id: string
+  cliente_id?: string
+  numero_factura: string
+  fecha_emision: string
+  fecha_vencimiento?: string
+  concepto: string
+  tarifa_por_hora?: number
+  horas_trabajadas?: number
+  monto_total: number
+  monto_pagado: number
+  estado: 'pendiente' | 'pagada' | 'pagada_parcialmente'
+  notas?: string
+  created_at: string
+  updated_at: string
+  cliente?: Cliente
+}

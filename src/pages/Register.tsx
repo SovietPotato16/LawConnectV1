@@ -42,18 +42,41 @@ export function Register() {
   const onSubmit = async (data: RegisterForm) => {
     setLoading(true)
     try {
-      const { error } = await signUp(data.email, data.password, {
+      console.log('Iniciando registro para:', data.email)
+      
+      const { data: authData, error } = await signUp(data.email, data.password, {
         nombre: data.nombre,
         apellido: data.apellido,
         especialidad: data.especialidad,
       })
+      
+      console.log('Resultado del registro:', { authData, error })
+      
       if (error) {
-        setError('root', { message: error.message })
+        console.error('Error en el registro:', error)
+        // Mostrar el error específico de Supabase
+        setError('root', { 
+          message: error.message.includes('User already registered')
+            ? 'Ya existe una cuenta con este email. Intenta iniciar sesión.'
+            : error.message.includes('Invalid email')
+            ? 'El formato del email no es válido.'
+            : error.message.includes('Password')
+            ? 'La contraseña no cumple con los requisitos.'
+            : `Error: ${error.message}`
+        })
+      } else if (authData?.user) {
+        console.log('Registro exitoso, redirigiendo a confirmación')
+        // Si el registro es exitoso, redirigir a la página de confirmación de email
+        navigate('/confirm-email')
       } else {
-        navigate('/dashboard')
+        console.error('Registro sin error pero sin datos de usuario')
+        setError('root', { message: 'Error: No se pudo crear la cuenta. Intenta de nuevo.' })
       }
-    } catch (error) {
-      setError('root', { message: 'Error inesperado' })
+    } catch (error: any) {
+      console.error('Error inesperado en el registro:', error)
+      setError('root', { 
+        message: `Error inesperado: ${error?.message || 'Contacta con soporte'}` 
+      })
     } finally {
       setLoading(false)
     }
