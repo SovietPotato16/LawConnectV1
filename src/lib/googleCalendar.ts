@@ -2,27 +2,32 @@ import { supabase } from './supabase'
 
 export interface GoogleCalendarConfig {
   clientId: string
-  clientSecret: string
+  // Client Secret se maneja SOLO en Supabase Edge Functions
   redirectUri: string
 }
 
 export interface CalendarEvent {
-  id?: string
+  id: string
   summary: string
   description?: string
   start: {
-    dateTime: string
+    dateTime?: string
+    date?: string
     timeZone?: string
   }
   end: {
-    dateTime: string
+    dateTime?: string
+    date?: string
     timeZone?: string
   }
   location?: string
   attendees?: Array<{
     email: string
     displayName?: string
+    responseStatus?: string
   }>
+  status?: string
+  htmlLink?: string
 }
 
 export class GoogleCalendarService {
@@ -32,7 +37,7 @@ export class GoogleCalendarService {
     this.config = config
   }
 
-  // Generate OAuth URL for Google Calendar authorization
+  // Generate OAuth URL for Google Calendar authorization (solo usa Client ID público)
   getAuthUrl(): string {
     const params = new URLSearchParams({
       client_id: this.config.clientId,
@@ -46,70 +51,82 @@ export class GoogleCalendarService {
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
   }
 
-  // Exchange authorization code for tokens
-  async exchangeCodeForTokens(code: string): Promise<{
-    access_token: string
-    refresh_token: string
-    expires_in: number
-    scope: string
-  }> {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: this.config.clientId,
-        client_secret: this.config.clientSecret,
-        code,
-        grant_type: 'authorization_code',
-        redirect_uri: this.config.redirectUri,
-      }),
-    })
+  // Exchange authorization code for tokens usando SOLO Supabase Edge Function
+  async exchangeCodeForTokens(code: string, userId: string): Promise<boolean> {
+    console.log('🔄 Intercambiando código por tokens usando Supabase Edge Function...')
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('google-oauth', {
+        body: {
+          code,
+          userId,
+          redirectUri: this.config.redirectUri,
+        },
+      })
 
-    if (!response.ok) {
-      throw new Error('Failed to exchange code for tokens')
+      if (error) {
+        console.error('❌ Error en Edge Function:', error)
+        throw new Error(`Error en Edge Function: ${error.message}`)
+      }
+
+      if (!data?.success) {
+        console.error('❌ Edge Function no devolvió éxito:', data)
+        throw new Error('Edge Function no completó exitosamente')
+      }
+
+      console.log('✅ Edge Function completada exitosamente')
+      return true
+
+    } catch (error) {
+      console.error('❌ Error llamando Edge Function:', error)
+      
+      // Verificar si es un error de Edge Function no desplegada
+      if (error instanceof Error && error.message.includes('not found')) {
+        throw new Error('Las Edge Functions no están desplegadas. Ve a tu Dashboard de Supabase → Edge Functions para desplegarlas.')
+      }
+      
+      throw error
     }
-
-    return response.json()
   }
 
-  // Refresh access token
-  async refreshAccessToken(refreshToken: string): Promise<{
-    access_token: string
-    expires_in: number
-  }> {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: this.config.clientId,
-        client_secret: this.config.clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-    })
+  // Refresh access token usando SOLO Supabase Edge Function
+  async refreshAccessToken(userId: string): Promise<string> {
+    console.log('🔄 Renovando tokens usando Supabase Edge Function...')
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('google-oauth-refresh', {
+        body: { userId },
+      })
 
-    if (!response.ok) {
-      throw new Error('Failed to refresh access token')
+      if (error) {
+        console.error('❌ Error en Edge Function refresh:', error)
+        throw new Error(`Error renovando tokens: ${error.message}`)
+      }
+
+      if (!data?.access_token) {
+        console.error('❌ Edge Function no devolvió access_token:', data)
+        throw new Error('No se pudo renovar el token de acceso')
+      }
+
+      console.log('✅ Tokens renovados exitosamente')
+      return data.access_token
+
+    } catch (error) {
+      console.error('❌ Error renovando tokens:', error)
+      
+      // Verificar si es un error de Edge Function no desplegada
+      if (error instanceof Error && error.message.includes('not found')) {
+        throw new Error('Las Edge Functions no están desplegadas para renovación de tokens.')
+      }
+      
+      throw error
     }
-
-    return response.json()
   }
 
-  // Get user's calendar events
-  async getEvents(accessToken: string, timeMin?: string, timeMax?: string): Promise<CalendarEvent[]> {
-    const params = new URLSearchParams({
-      timeMin: timeMin || new Date().toISOString(),
-      timeMax: timeMax || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      singleEvents: 'true',
-      orderBy: 'startTime',
-    })
-
+  // Fetch calendar events from Google Calendar API
+  async getEvents(accessToken: string, maxResults = 10): Promise<CalendarEvent[]> {
     const response = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${new Date().toISOString()}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -126,13 +143,13 @@ export class GoogleCalendarService {
   }
 
   // Create a new calendar event
-  async createEvent(accessToken: string, event: CalendarEvent): Promise<CalendarEvent> {
+  async createEvent(accessToken: string, event: Partial<CalendarEvent>): Promise<CalendarEvent> {
     const response = await fetch(
       'https://www.googleapis.com/calendar/v3/calendars/primary/events',
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(event),
@@ -147,13 +164,13 @@ export class GoogleCalendarService {
   }
 
   // Update an existing calendar event
-  async updateEvent(accessToken: string, eventId: string, event: CalendarEvent): Promise<CalendarEvent> {
+  async updateEvent(accessToken: string, eventId: string, event: Partial<CalendarEvent>): Promise<CalendarEvent> {
     const response = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
       {
         method: 'PUT',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(event),
@@ -185,7 +202,7 @@ export class GoogleCalendarService {
   }
 }
 
-// Store tokens in Supabase
+// Store Google Calendar tokens in Supabase (sin cambios - sigue siendo seguro)
 export async function storeGoogleTokens(
   userId: string,
   accessToken: string,
@@ -206,11 +223,11 @@ export async function storeGoogleTokens(
     })
 
   if (error) {
-    throw new Error(`Failed to store tokens: ${error.message}`)
+    throw new Error('Failed to store Google Calendar tokens')
   }
 }
 
-// Get stored tokens from Supabase
+// Get stored tokens from Supabase (sin cambios)
 export async function getGoogleTokens(userId: string) {
   const { data, error } = await supabase
     .from('google_calendar_tokens')
@@ -225,7 +242,7 @@ export async function getGoogleTokens(userId: string) {
   return data
 }
 
-// Check if tokens need refresh and refresh if necessary
+// Check if tokens need refresh and refresh if necessary usando Supabase Edge Function
 export async function ensureValidTokens(userId: string, calendarService: GoogleCalendarService) {
   const tokens = await getGoogleTokens(userId)
   if (!tokens) {
@@ -235,19 +252,10 @@ export async function ensureValidTokens(userId: string, calendarService: GoogleC
   const now = new Date()
   const expiresAt = new Date(tokens.expires_at)
 
-  // If token expires in less than 5 minutes, refresh it
+  // If token expires in less than 5 minutes, refresh it usando Supabase Edge Function
   if (expiresAt.getTime() - now.getTime() < 5 * 60 * 1000) {
-    const refreshed = await calendarService.refreshAccessToken(tokens.refresh_token)
-    
-    await storeGoogleTokens(
-      userId,
-      refreshed.access_token,
-      tokens.refresh_token,
-      refreshed.expires_in,
-      tokens.scope
-    )
-
-    return refreshed.access_token
+    const newAccessToken = await calendarService.refreshAccessToken(userId)
+    return newAccessToken
   }
 
   return tokens.access_token

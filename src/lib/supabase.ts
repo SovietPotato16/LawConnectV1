@@ -17,7 +17,11 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true, // Permitir detección de sesión en URLs para confirmación de email y reset de contraseña
-    flowType: 'pkce'
+    flowType: 'pkce',
+    // Configuración adicional para OAuth flows
+    storageKey: 'lawconnect-auth-token', // Clave única para evitar conflictos
+    storage: window.localStorage, // Usar localStorage explícitamente
+    debug: import.meta.env.DEV, // Debug en desarrollo
   }
 })
 

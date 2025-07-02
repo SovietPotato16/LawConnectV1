@@ -1,141 +1,180 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { CheckCircle, XCircle, Loader2, Calendar } from 'lucide-react'
 import { useGoogleCalendar } from '@/hooks/useGoogleCalendar'
+import { useAuth } from '@/hooks/useAuth'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { CheckCircle, XCircle, Loader2, Calendar } from 'lucide-react'
 
 export function CalendarCallback() {
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
-  const [error, setError] = useState<string | null>(null)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { handleCallback } = useGoogleCalendar()
+  const { user, loading: authLoading, restoreSessionAfterOAuth } = useAuth()
+  const { handleOAuthCallback } = useGoogleCalendar()
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
+  const [message, setMessage] = useState('')
 
   useEffect(() => {
     const processCallback = async () => {
+      console.log('🔄 Iniciando procesamiento de callback...')
+      console.log('👤 Usuario actual:', user ? user.id : 'No autenticado')
+      console.log('⏳ Auth loading:', authLoading)
+
+      // Esperar a que la autenticación se resuelva
+      if (authLoading) {
+        console.log('⏳ Esperando a que se resuelva la autenticación...')
+        return
+      }
+
+      // Si no hay usuario, intentar restaurar sesión
+      if (!user) {
+        console.log('🔄 Intentando restaurar sesión después de OAuth...')
+        try {
+          await restoreSessionAfterOAuth()
+          // Dar un momento para que la sesión se actualice
+          setTimeout(() => {
+            processCallback()
+          }, 1000)
+          return
+        } catch (error) {
+          console.error('❌ Error restaurando sesión:', error)
+        }
+      }
+
+      // Verificar que el usuario esté autenticado
+      if (!user) {
+        console.log('❌ Usuario no autenticado en callback')
+        setStatus('error')
+        setMessage('Tu sesión expiró durante la autorización. Por favor inicia sesión de nuevo y vuelve a intentar.')
+        return
+      }
+
+      // Obtener código de autorización de la URL
+      const code = searchParams.get('code')
+      const error = searchParams.get('error')
+
+      console.log('🔑 Código OAuth:', code ? code.substring(0, 10) + '...' : 'No recibido')
+      console.log('❌ Error OAuth:', error || 'Ninguno')
+
+      // Si el usuario canceló la autorización
+      if (error) {
+        console.log('❌ Usuario canceló la autorización:', error)
+        setStatus('error')
+        setMessage(`Error en la autorización: ${error}`)
+        return
+      }
+
+      // Si no hay código, algo salió mal
+      if (!code) {
+        console.log('❌ No se recibió código de autorización')
+        setStatus('error')
+        setMessage('No se recibió el código de autorización')
+        return
+      }
+
       try {
-        // Verificar si hay un código de autorización en los parámetros
-        const code = searchParams.get('code')
-        const errorParam = searchParams.get('error')
-
-        if (errorParam) {
-          throw new Error(`Error de autorización: ${errorParam}`)
-        }
-
-        if (!code) {
-          throw new Error('No se recibió código de autorización')
-        }
-
-        // Procesar el código de autorización
-        await handleCallback(code)
+        console.log('🔄 Procesando callback OAuth con usuario:', user.id)
+        
+        // Procesar el callback OAuth de forma segura
+        await handleOAuthCallback(code)
+        
+        console.log('✅ OAuth callback procesado exitosamente')
         setStatus('success')
-
-        // Redirigir al calendario después de 3 segundos
+        setMessage('¡Google Calendar conectado exitosamente!')
+        
+        // Redirigir al calendario después de 2 segundos
         setTimeout(() => {
           navigate('/calendario')
-        }, 3000)
-
-      } catch (error: any) {
-        console.error('Error en callback de Google Calendar:', error)
-        setError(error.message || 'Error desconocido al conectar con Google Calendar')
+        }, 2000)
+        
+      } catch (error) {
+        console.error('❌ Error procesando OAuth callback:', error)
         setStatus('error')
+        setMessage(
+          error instanceof Error 
+            ? error.message 
+            : 'Error al conectar Google Calendar. Por favor intenta de nuevo.'
+        )
       }
     }
 
     processCallback()
-  }, [searchParams, handleCallback, navigate])
-
-  // Función para reintentar la conexión
-  const handleRetry = () => {
-    navigate('/calendario')
-  }
+  }, [searchParams, user, authLoading, handleOAuthCallback, navigate, restoreSessionAfterOAuth])
 
   return (
     <div className="min-h-screen bg-base flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="flex items-center justify-center w-12 h-12 bg-blue rounded-lg">
-              <Calendar className="h-7 w-7 text-base" />
-            </div>
-            <span className="text-2xl font-bold text-text">LawConnect</span>
+          <div className="mx-auto mb-4">
+            {status === 'loading' && (
+              <Loader2 className="h-12 w-12 text-blue animate-spin" />
+            )}
+            {status === 'success' && (
+              <CheckCircle className="h-12 w-12 text-green" />
+            )}
+            {status === 'error' && (
+              <XCircle className="h-12 w-12 text-red" />
+            )}
           </div>
-          <CardTitle>
-            {status === 'loading' && 'Conectando con Google Calendar'}
-            {status === 'success' && 'Conexión Exitosa'}
+          <CardTitle className="text-xl">
+            {status === 'loading' && 'Conectando Google Calendar...'}
+            {status === 'success' && '¡Conexión Exitosa!'}
             {status === 'error' && 'Error de Conexión'}
           </CardTitle>
         </CardHeader>
-        <CardContent className="text-center">
+        
+        <CardContent className="text-center space-y-4">
+          <p className="text-subtext0">
+            {message}
+          </p>
+          
           {status === 'loading' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-center w-16 h-16 bg-blue/10 rounded-full mx-auto">
-                <Loader2 className="h-8 w-8 text-blue animate-spin" />
-              </div>
-              <div className="space-y-2">
-                <p className="text-subtext0">
-                  Procesando autorización de Google Calendar...
-                </p>
-                <p className="text-xs text-subtext0">
-                  Esto puede tomar unos segundos
-                </p>
-              </div>
+            <div className="text-sm text-subtext1">
+              {authLoading 
+                ? 'Verificando tu sesión...' 
+                : (!user ? 'Restaurando sesión...' : 'Procesando autorización de Google Calendar...')}
             </div>
           )}
-
+          
           {status === 'success' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-center w-16 h-16 bg-green/10 rounded-full mx-auto">
-                <CheckCircle className="h-8 w-8 text-green" />
+            <div className="space-y-3">
+              <div className="text-sm text-green">
+                Serás redirigido al calendario automáticamente
               </div>
-              <div className="space-y-2">
-                <p className="text-subtext0">
-                  ¡Google Calendar se conectó exitosamente!
-                </p>
-                <p className="text-xs text-subtext0">
-                  Ahora puedes sincronizar y gestionar tus eventos.
-                </p>
-                <p className="text-xs text-subtext0">
-                  Serás redirigido automáticamente...
-                </p>
-              </div>
-              <Button onClick={() => navigate('/calendario')} className="w-full">
+              <Button 
+                onClick={() => navigate('/calendario')}
+                className="w-full gap-2"
+              >
+                <Calendar className="h-4 w-4" />
                 Ir al Calendario
               </Button>
             </div>
           )}
-
+          
           {status === 'error' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-center w-16 h-16 bg-red/10 rounded-full mx-auto">
-                <XCircle className="h-8 w-8 text-red" />
-              </div>
-              <div className="space-y-2">
-                <p className="text-red text-sm font-medium">
-                  Error al conectar con Google Calendar
-                </p>
-                {error && (
-                  <p className="text-xs text-subtext0 bg-surface1 p-3 rounded-lg">
-                    {error}
-                  </p>
-                )}
-                <p className="text-xs text-subtext0">
-                  Intenta conectar nuevamente desde la página de calendario.
-                </p>
-              </div>
-              <div className="flex flex-col space-y-2">
-                <Button onClick={handleRetry} className="w-full">
-                  Ir al Calendario
-                </Button>
+            <div className="space-y-3">
+              {!user && (
                 <Button 
-                  variant="outline" 
-                  onClick={() => window.location.reload()}
+                  onClick={() => navigate('/login')}
                   className="w-full"
                 >
-                  Reintentar Conexión
+                  Iniciar Sesión
                 </Button>
-              </div>
+              )}
+              <Button 
+                onClick={() => navigate('/calendario')}
+                className="w-full"
+                variant={!user ? "outline" : "default"}
+              >
+                Volver al Calendario
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => navigate('/google-calendar-diagnostic')}
+                className="w-full text-xs"
+              >
+                Diagnóstico de Configuración
+              </Button>
             </div>
           )}
         </CardContent>

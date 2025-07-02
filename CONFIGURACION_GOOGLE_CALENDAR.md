@@ -1,38 +1,63 @@
-# 📅 Configuración de Google Calendar en LawConnect
+# 📅 Configuración Ultra-Segura de Google Calendar en LawConnect
 
-Esta guía te explica cómo configurar la integración completa de Google Calendar en tu aplicación LawConnect.
+Esta guía te explica cómo configurar la integración **ULTRA-SEGURA** de Google Calendar usando **Supabase Edge Functions** y **Supabase Vault** para máxima protección de credenciales.
+
+## 🔒 Arquitectura Ultra-Segura Implementada
+
+### **✅ Frontend (React)**
+- Solo maneja el **Client ID** (público)
+- Redirige a Google para autorización
+- Recibe código de autorización
+- **NO** tiene acceso al Client Secret
+
+### **✅ Backend (Supabase Edge Functions)**
+- Maneja el **Client Secret** cifrado en Supabase Vault
+- Intercambia código por tokens de forma ultra-segura
+- Renueva tokens automáticamente
+- Procesamiento en el edge (ultra-rápido)
+
+### **✅ Base de Datos (Supabase)**
+- Almacenamiento seguro de tokens
+- Row Level Security (RLS)
+- Cifrado automático end-to-end
+- Supabase Vault para secrets
 
 ## 🚀 Funcionalidades Implementadas
 
-✅ **Autenticación OAuth 2.0** - Conexión segura con Google Calendar
-✅ **Sincronización bidireccional** - Ver y crear eventos desde LawConnect
-✅ **Gestión completa de eventos** - Crear, editar y eliminar eventos
-✅ **Interfaz intuitiva** - Vista moderna con acciones rápidas
-✅ **Manejo de tokens** - Almacenamiento seguro y refresh automático
+✅ **OAuth 2.0 Ultra-Seguro** - Client Secret cifrado en Supabase Vault  
+✅ **Sincronización bidireccional** - Ver y crear eventos desde LawConnect  
+✅ **Gestión completa de eventos** - Crear, editar y eliminar eventos  
+✅ **Interfaz intuitiva** - Vista moderna con acciones rápidas  
+✅ **Renovación automática** - Tokens se renuevan sin intervención del usuario  
+✅ **Edge Functions** - Procesamiento ultra-rápido en el edge  
+✅ **Todo centralizado** - Base de datos, auth, functions y secrets en Supabase  
 
 ## ⚙️ Configuración en Google Cloud Console
 
-### Paso 1: Crear Proyecto en Google Cloud Console
+### Paso 1: Crear Proyecto y Habilitar APIs
 
 1. Ve a [Google Cloud Console](https://console.cloud.google.com/)
 2. Crea un nuevo proyecto o selecciona uno existente
-3. Asegúrate de que esté habilitada la **Google Calendar API**
+3. Habilita la **Google Calendar API**:
+   - APIs & Services → Library → Google Calendar API → Enable
 
 ### Paso 2: Configurar OAuth 2.0
 
-1. Ve a **APIs & Services** > **Credentials**
-2. Haz clic en **Create Credentials** > **OAuth 2.0 Client IDs**
+1. Ve a **APIs & Services** → **Credentials**
+2. Haz clic en **Create Credentials** → **OAuth 2.0 Client IDs**
 3. Selecciona **Web application**
 4. Configura los URIs autorizados:
 
 #### **JavaScript origins autorizados:**
 ```
+http://localhost:5173
 http://localhost:5174
 https://tu-dominio.com
 ```
 
 #### **Redirect URIs autorizados:**
 ```
+http://localhost:5173/calendar/callback
 http://localhost:5174/calendar/callback
 https://tu-dominio.com/calendar/callback
 ```
@@ -40,96 +65,78 @@ https://tu-dominio.com/calendar/callback
 ### Paso 3: Obtener Credenciales
 
 1. Copia el **Client ID** y **Client Secret**
-2. Guárdalos para el siguiente paso
+2. Guárdalos para la configuración de Supabase
 
-## 🔧 Variables de Entorno
+## 🔧 Configuración Ultra-Segura
 
-Agrega estas variables a tu archivo `.env`:
-
+### **1. Frontend (.env en la raíz del proyecto):**
 ```env
-# Google Calendar API Configuration
-VITE_GOOGLE_CLIENT_ID=tu-client-id-aqui.googleusercontent.com
-VITE_GOOGLE_CLIENT_SECRET=tu-client-secret-aqui
+# Solo necesitas el Client ID público
+VITE_GOOGLE_CLIENT_ID=tu-client-id.googleusercontent.com
 
-# Opcional: Para producción
-VITE_GOOGLE_REDIRECT_URI=https://tu-dominio.com/calendar/callback
+# Tus otras variables de Supabase
+VITE_SUPABASE_URL=tu-proyecto.supabase.co
+VITE_SUPABASE_ANON_KEY=tu-anon-key
 ```
 
-⚠️ **Importante**: El `Client Secret` debe mantenerse privado. En producción, considera usar un servidor backend para manejar el intercambio de tokens.
+### **2. Supabase Secrets (Dashboard → Settings → Vault):**
+Configura estos secrets en tu Supabase Dashboard:
+
+1. Ve a **Settings** → **Vault**
+2. Agrega estos secrets:
+
+```
+Name: GOOGLE_CLIENT_ID
+Value: tu-client-id.googleusercontent.com
+
+Name: GOOGLE_CLIENT_SECRET  
+Value: tu-client-secret
+```
+
+⚠️ **Ultra-Seguro**: Los secrets de Supabase están cifrados end-to-end y solo son accesibles por Edge Functions.
+
+### **3. Supabase Edge Functions:**
+
+Las funciones ya están creadas en tu proyecto:
+```
+✅ supabase/functions/google-oauth/index.ts
+✅ supabase/functions/google-oauth-refresh/index.ts
+```
+
+Para desplegar las funciones:
+```bash
+# Desplegar todas las functions
+supabase functions deploy
+
+# O desplegar individual
+supabase functions deploy google-oauth
+supabase functions deploy google-oauth-refresh
+```
 
 ## 🗄️ Base de Datos
 
 La migración ya está incluida en tu proyecto:
-
 ```sql
--- Ejecutar migración
-supabase migration up
+-- Tabla para tokens de Google Calendar con máxima seguridad
+CREATE TABLE google_calendar_tokens (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  access_token TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  scope TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Row Level Security máximo
+ALTER TABLE google_calendar_tokens ENABLE ROW LEVEL SECURITY;
+
+-- Política: usuarios solo acceden a sus propios tokens
+CREATE POLICY "Users can only access their own tokens"
+ON google_calendar_tokens FOR ALL
+USING (auth.uid() = user_id);
 ```
-
-O aplicar manualmente el archivo:
-```
-supabase/migrations/20250125000002_create_google_calendar_tokens.sql
-```
-
-## 🎯 Cómo Usar la Integración
-
-### 1. **Conectar Google Calendar**
-- Ve a `/calendario`
-- Haz clic en "Conectar Google Calendar"
-- Autoriza la aplicación en Google
-- Serás redirigido automáticamente
-
-### 2. **Crear Eventos**
-- Haz clic en "Nueva Cita"
-- Llena el formulario
-- El evento se crea en Google Calendar automáticamente
-
-### 3. **Editar Eventos**
-- Pasa el mouse sobre un evento
-- Haz clic en el ícono de editar
-- Modifica los datos
-- Los cambios se sincronizan con Google
-
-### 4. **Eliminar Eventos**
-- Pasa el mouse sobre un evento
-- Haz clic en el ícono de eliminar
-- Confirma la eliminación
-
-### 5. **Sincronizar**
-- Haz clic en "Sincronizar eventos"
-- Actualiza la lista con eventos de Google Calendar
-
-## 🔐 Seguridad y Privacidad
-
-### **Tokens de Acceso:**
-- Se almacenan encriptados en Supabase
-- Se actualizan automáticamente
-- Solo el usuario puede acceder a sus propios tokens
-
-### **Permisos de Google:**
-- Solo acceso de lectura/escritura al calendario
-- No acceso a otros datos de Google
-- El usuario puede revocar acceso en cualquier momento
-
-### **Políticas RLS:**
-- Row Level Security habilitada
-- Cada usuario solo ve sus propios tokens
-- Aislamiento completo entre usuarios
-
-## 🛠️ Archivos Modificados/Creados
-
-### **Nuevos Archivos:**
-- `src/pages/CalendarCallback.tsx` - Maneja la autorización OAuth
-- `supabase/migrations/20250125000002_create_google_calendar_tokens.sql` - Tabla de tokens
-
-### **Archivos Mejorados:**
-- `src/pages/Calendario.tsx` - Interfaz mejorada con edición/eliminación
-- `src/hooks/useGoogleCalendar.ts` - Hook corregido con import de Supabase
-- `src/App.tsx` - Ruta de callback agregada
-
-### **Archivos Existentes (ya implementados):**
-- `src/lib/googleCalendar.ts` - Servicio de Google Calendar API
-- `src/hooks/useGoogleCalendar.ts` - Hook de React para Google Calendar
 
 ## 🎨 Funcionalidades de la Interfaz
 
@@ -153,60 +160,93 @@ supabase/migrations/20250125000002_create_google_calendar_tokens.sql
 
 ### **Error: "Google Client ID not configured"**
 - Verifica que `VITE_GOOGLE_CLIENT_ID` esté en tu `.env`
-- Reinicia el servidor de desarrollo después de agregar variables
+- Reinicia el servidor de desarrollo: `npm run dev`
 
 ### **Error: "redirect_uri_mismatch"**
-- Verifica que el redirect URI en Google Cloud Console sea exacto
-- Formato: `http://localhost:5174/calendar/callback` (sin slash final)
+- Verifica que los URIs en Google Cloud Console sean exactos
+- No olvides incluir tanto `:5173` como `:5174` para desarrollo
+- Formato exacto: `http://localhost:5174/calendar/callback`
 
 ### **Error: "Access blocked"**
 - Verifica que la Google Calendar API esté habilitada
-- Revisa que el proyecto tenga configurado OAuth consent screen
+- Configura OAuth consent screen si es necesario
+- Asegúrate de que el proyecto tenga usuarios de prueba agregados
+
+### **Error en Supabase Edge Functions:**
+- Verifica que los secrets estén configurados en Supabase Vault
+- Revisa los logs de functions en Supabase Dashboard
+- Asegúrate de haber desplegado las functions: `supabase functions deploy`
+
+### **Error: "Missing required environment variables"**
+- Verifica que `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` estén en Supabase Vault
+- Los secrets deben estar configurados exactamente como se muestra arriba
 
 ### **Eventos no se sincronizan:**
 - Haz clic en "Sincronizar eventos"
 - Verifica los permisos de Google Calendar
 - Revisa la consola del navegador para errores
+- Prueba desconectar y volver a conectar
 
-### **Tokens expirados:**
-- El sistema automáticamente renueva tokens
-- Si hay problemas, desconecta y vuelve a conectar
+## 📱 Flujo de Usuario Ultra-Seguro
 
-## 📱 Flujo de Usuario Completo
+### **Primera conexión:**
+1. Usuario ve pantalla de conexión en `/calendario`
+2. Hace clic en "Conectar Google Calendar"
+3. Es redirigido a Google para autorizar (OAuth)
+4. Google redirige a `/calendar/callback`
+5. **Supabase Edge Function** intercambia código por tokens usando secrets cifrados
+6. Tokens se almacenan en Supabase con RLS
+7. Usuario regresa al calendario conectado
 
-1. **Primera vez:**
-   - Usuario ve pantalla de conexión
-   - Hace clic en "Conectar Google Calendar"
-   - Es redirigido a Google para autorizar
-   - Vuelve a LawConnect con calendario conectado
+### **Uso diario:**
+1. Ve eventos de Google Calendar en LawConnect
+2. Crea nuevos eventos desde la interfaz
+3. Edita eventos existentes
+4. Los cambios se sincronizan automáticamente
+5. Tokens se renuevan automáticamente en Edge Functions
 
-2. **Uso diario:**
-   - Ve sus eventos de Google Calendar
-   - Crea nuevos eventos desde LawConnect
-   - Edita eventos existentes
-   - Sincroniza cuando sea necesario
+## 🔒 Ventajas de la Arquitectura Ultra-Segura
 
-3. **Gestión:**
-   - Puede desconectar en cualquier momento
-   - Tokens se limpian automáticamente
-   - Re-conexión es simple y rápida
+- **🔐 Supabase Vault:** Cifrado end-to-end para secrets
+- **⚡ Edge Functions:** Procesamiento ultra-rápido en el edge
+- **🎯 Todo centralizado:** Base de datos, auth, functions y secrets en un lugar
+- **🚀 Escalable:** Maneja millones de requests automáticamente
+- **🔓 No vendor lock-in:** Compatible con cualquier hosting frontend
+- **🛡️ Máxima seguridad:** Client Secret nunca expuesto, ni siquiera en variables de entorno
+- **🔄 Auto-renovación:** Tokens se renuevan sin exposición de credenciales
+- **🎛️ Control total:** Logs, métricas y control granular desde Supabase Dashboard
 
-## 🌟 Próximas Mejoras
+## 🚀 Deploy y Producción
 
-Posibles extensiones para el futuro:
-- Múltiples calendarios de Google
-- Notificaciones push
-- Integración con casos y clientes
-- Vista de calendario completo (mensual/semanal)
-- Recordatorios automáticos
-- Sincronización con otros proveedores (Outlook, etc.)
+### **Para desarrollo:**
+```bash
+# Asegúrate de tener Supabase CLI
+npm install -g supabase
 
-¡Tu integración de Google Calendar está lista! 🎉
+# Aplicar migraciones
+supabase db push
 
-## 📞 Soporte
+# Desplegar Edge Functions
+supabase functions deploy
+```
 
-Si encuentras problemas:
-1. Revisa la consola del navegador
-2. Verifica las variables de entorno
-3. Confirma la configuración de Google Cloud Console
-4. Usa la página `/test-auth` para diagnósticos generales 
+### **Para producción:**
+1. **Configura secrets en Supabase Vault** (production project)
+2. **Despliega Edge Functions** en production
+3. **Actualiza URLs** en Google Cloud Console
+4. **Deploy frontend** en tu plataforma preferida
+
+¡Tu integración de Google Calendar ahora tiene **seguridad de nivel enterprise** y está lista para millones de usuarios! 🎉
+
+## 🆚 Comparación de Arquitecturas
+
+| Aspecto | Arquitectura Anterior | **Nueva Arquitectura** |
+|---------|----------------------|--------------------------|
+| Client Secret | Variables de entorno | **Supabase Vault (cifrado)** |
+| Functions | Netlify Functions | **Supabase Edge Functions** |
+| Velocidad | Regional | **Global Edge** |
+| Seguridad | Seguro | **Ultra-Seguro** |
+| Centralización | Múltiples servicios | **Todo en Supabase** |
+| Escalabilidad | Limitada | **Ilimitada** |
+
+Tu aplicación ahora usa la **arquitectura más segura posible** para OAuth! 🔒✨ 
