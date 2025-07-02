@@ -12,11 +12,40 @@ if (!supabaseUrl.startsWith('https://') || supabaseUrl.includes('your-project-re
   throw new Error('Invalid Supabase URL. Please provide a valid Supabase project URL in your .env file.')
 }
 
+// Función para determinar si debemos detectar sesión en URL
+const shouldDetectSessionInUrl = () => {
+  const currentPath = window.location.pathname
+  const currentSearch = window.location.search
+  
+  // Solo detectar sesión en URLs para funcionalidades específicas de Supabase
+  const supabaseAuthPaths = [
+    '/confirm-email',
+    '/reset-password', 
+    '/verify'
+  ]
+  
+  // NO detectar en el callback de Google Calendar
+  if (currentPath === '/calendar/callback') {
+    console.log('🚫 Evitando detectSessionInUrl para Google Calendar callback')
+    return false
+  }
+  
+  // Solo detectar si estamos en una página de auth de Supabase
+  const isSupabaseAuthPage = supabaseAuthPaths.some(path => currentPath.includes(path))
+  
+  // O si hay parámetros típicos de Supabase auth en la URL
+  const hasSupabaseAuthParams = currentSearch.includes('access_token') || 
+                                 currentSearch.includes('refresh_token') ||
+                                 currentSearch.includes('token_hash')
+  
+  return isSupabaseAuthPage || hasSupabaseAuthParams
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true, // Permitir detección de sesión en URLs para confirmación de email y reset de contraseña
+    detectSessionInUrl: shouldDetectSessionInUrl(), // ✅ Detección inteligente
     flowType: 'pkce',
     // Configuración adicional para OAuth flows
     storageKey: 'lawconnect-auth-token', // Clave única para evitar conflictos

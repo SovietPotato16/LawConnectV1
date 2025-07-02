@@ -230,7 +230,7 @@ export function TagManager({ selectedTags = [], onTagsChange, showCreateButton =
               variant={selectedTags.includes(tag.id) ? "default" : "outline"}
               className="cursor-pointer flex items-center gap-1 group"
               style={selectedTags.includes(tag.id) ? 
-                { backgroundColor: tag.color, color: '#1e1e2e' } : 
+                { backgroundColor: tag.color, color: '#000000' } : 
                 { borderColor: tag.color, color: tag.color }
               }
               onClick={() => toggleTag(tag.id)}

@@ -28,6 +28,18 @@ export interface CalendarEvent {
   }>
   status?: string
   htmlLink?: string
+  // Recordatorios de Google Calendar
+  reminders?: {
+    useDefault?: boolean
+    overrides?: Array<{
+      method: 'email' | 'popup'
+      minutes: number
+    }>
+  }
+  // Campos para asociación con casos y tags del sistema LawConnect
+  caso_id?: string
+  cliente_id?: string
+  tags?: string[]
 }
 
 export class GoogleCalendarService {
@@ -125,8 +137,15 @@ export class GoogleCalendarService {
 
   // Fetch calendar events from Google Calendar API
   async getEvents(accessToken: string, maxResults = 10): Promise<CalendarEvent[]> {
+    console.log('📅 getEvents - Obteniendo eventos de Google Calendar...')
+    console.log('📅 getEvents - maxResults:', maxResults)
+    console.log('📅 getEvents - Token:', accessToken ? `Disponible (${accessToken.substring(0, 10)}...)` : 'NO DISPONIBLE')
+    
+    const timeMin = new Date().toISOString()
+    console.log('📅 getEvents - timeMin:', timeMin)
+    
     const response = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${new Date().toISOString()}`,
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${timeMin}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -134,16 +153,34 @@ export class GoogleCalendarService {
       }
     )
 
+    console.log('📅 getEvents - Respuesta HTTP status:', response.status)
+
     if (!response.ok) {
-      throw new Error('Failed to fetch calendar events')
+      const errorText = await response.text()
+      console.error('❌ getEvents - Error en respuesta:', errorText)
+      throw new Error(`Failed to fetch calendar events: ${response.status} - ${errorText}`)
     }
 
     const data = await response.json()
+    console.log('📅 getEvents - Respuesta completa de Google:', data)
+    console.log('📅 getEvents - Número de eventos encontrados:', data.items ? data.items.length : 0)
+    
+    if (data.items && data.items.length > 0) {
+      console.log('📅 getEvents - Primeros eventos:', data.items.slice(0, 3).map((event: any) => ({
+        id: event.id,
+        summary: event.summary,
+        start: event.start
+      })))
+    }
+    
     return data.items || []
   }
 
   // Create a new calendar event
   async createEvent(accessToken: string, event: Partial<CalendarEvent>): Promise<CalendarEvent> {
+    console.log('➕ createEvent - Datos del evento a crear:', event)
+    console.log('➕ createEvent - Token de acceso:', accessToken ? `Disponible (${accessToken.substring(0, 10)}...)` : 'NO DISPONIBLE')
+    
     const response = await fetch(
       'https://www.googleapis.com/calendar/v3/calendars/primary/events',
       {
@@ -156,15 +193,29 @@ export class GoogleCalendarService {
       }
     )
 
+    console.log('➕ createEvent - Respuesta HTTP status:', response.status)
+    
     if (!response.ok) {
-      throw new Error('Failed to create calendar event')
+      const errorText = await response.text()
+      console.error('❌ createEvent - Error en respuesta:', errorText)
+      throw new Error(`Failed to create calendar event: ${response.status} - ${errorText}`)
     }
 
-    return response.json()
+    const createdEvent = await response.json()
+    console.log('✅ createEvent - Evento creado exitosamente:', {
+      id: createdEvent.id,
+      summary: createdEvent.summary,
+      htmlLink: createdEvent.htmlLink
+    })
+    
+    return createdEvent
   }
 
   // Update an existing calendar event
   async updateEvent(accessToken: string, eventId: string, event: Partial<CalendarEvent>): Promise<CalendarEvent> {
+    console.log('✏️ updateEvent - ID del evento:', eventId)
+    console.log('✏️ updateEvent - Datos a actualizar:', event)
+    
     const response = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
       {
@@ -177,11 +228,21 @@ export class GoogleCalendarService {
       }
     )
 
+    console.log('✏️ updateEvent - Respuesta HTTP status:', response.status)
+
     if (!response.ok) {
-      throw new Error('Failed to update calendar event')
+      const errorText = await response.text()
+      console.error('❌ updateEvent - Error en respuesta:', errorText)
+      throw new Error(`Failed to update calendar event: ${response.status} - ${errorText}`)
     }
 
-    return response.json()
+    const updatedEvent = await response.json()
+    console.log('✅ updateEvent - Evento actualizado exitosamente:', {
+      id: updatedEvent.id,
+      summary: updatedEvent.summary
+    })
+
+    return updatedEvent
   }
 
   // Delete a calendar event
@@ -227,19 +288,62 @@ export async function storeGoogleTokens(
   }
 }
 
-// Get stored tokens from Supabase (sin cambios)
+// Get stored tokens from Supabase - Manejo robusto de múltiples filas
 export async function getGoogleTokens(userId: string) {
-  const { data, error } = await supabase
-    .from('google_calendar_tokens')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle()
+  console.log('🔍 getGoogleTokens - Consultando tokens para usuario:', userId)
+  
+  try {
+    // Obtener todos los tokens para el usuario, ordenados por fecha de creación (más reciente primero)
+    const { data, error } = await supabase
+      .from('google_calendar_tokens')
+      .select('*')
+      .eq('user_id', userId)
+      .order('expires_at', { ascending: false })  // El más reciente primero
+    
+    if (error) {
+      console.error('❌ Error consultando tokens:', error)
+      return null
+    }
 
-  if (error) {
+    if (!data || data.length === 0) {
+      console.log('ℹ️ No se encontraron tokens para el usuario')
+      return null
+    }
+
+    // Si hay múltiples filas, usar la más reciente
+    if (data.length > 1) {
+      console.log(`⚠️ Se encontraron ${data.length} tokens para el usuario, usando el más reciente`)
+      
+      // Limpiar tokens duplicados (mantener solo el más reciente)
+      const tokensToDelete = data.slice(1) // Todos excepto el primero (más reciente)
+      if (tokensToDelete.length > 0) {
+        console.log(`🧹 Limpiando ${tokensToDelete.length} tokens duplicados...`)
+        const idsToDelete = tokensToDelete.map(token => token.id).filter(Boolean)
+        
+        if (idsToDelete.length > 0) {
+          await supabase
+            .from('google_calendar_tokens')
+            .delete()
+            .in('id', idsToDelete)
+          console.log('✅ Tokens duplicados eliminados')
+        }
+      }
+    }
+
+    const token = data[0] // El más reciente
+    console.log('✅ Token encontrado:', {
+      hasAccessToken: !!token.access_token,
+      hasRefreshToken: !!token.refresh_token,
+      expiresAt: token.expires_at,
+      isExpired: new Date(token.expires_at) < new Date()
+    })
+
+    return token
+
+  } catch (error) {
+    console.error('❌ Excepción en getGoogleTokens:', error)
     return null
   }
-
-  return data
 }
 
 // Check if tokens need refresh and refresh if necessary usando Supabase Edge Function

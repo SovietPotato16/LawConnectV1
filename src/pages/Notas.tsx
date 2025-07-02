@@ -379,7 +379,7 @@ export function Notas() {
                     <CardTitle className="text-lg line-clamp-2 flex-1">{nota.titulo}</CardTitle>
                     <div className="flex gap-1 flex-shrink-0 ml-2">
                       {nota.id === 'ejemplo-nota-001' && (
-                        <Badge variant="secondary" className="bg-yellow text-base">
+                        <Badge variant="secondary" className="bg-yellow text-black">
                           Ejemplo
                         </Badge>
                       )}

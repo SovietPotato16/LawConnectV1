@@ -962,7 +962,7 @@ ${migrationSQL}
             <p className="text-subtext0">
               Caso #{caso.id.slice(0, 8)}
               {isExampleCase && (
-                <Badge variant="secondary" className="ml-2 bg-yellow text-base">
+                <Badge variant="secondary" className="ml-2 bg-yellow text-black">
                   Ejemplo - Solo lectura
                 </Badge>
               )}

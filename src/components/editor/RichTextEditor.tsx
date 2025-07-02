@@ -49,7 +49,7 @@ export function RichTextEditor({
       }),
       Mention.configure({
         HTMLAttributes: {
-          class: 'mention bg-blue text-base px-1 py-0.5 rounded text-sm',
+          class: 'mention bg-blue text-black px-1 py-0.5 rounded text-sm',
         },
         suggestion: {
           items: ({ query }) => {

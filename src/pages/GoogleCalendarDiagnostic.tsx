@@ -1,119 +1,355 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useAuth } from '@/hooks/useAuth'
+import { useGoogleCalendar } from '@/hooks/useGoogleCalendar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Copy, ExternalLink, AlertTriangle, CheckCircle, XCircle, Shield, Database } from 'lucide-react'
+import { Copy, ExternalLink, AlertTriangle, CheckCircle, XCircle, Shield, Database, AlertCircle, Clock, Loader2 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
+
+interface DiagnosticResult {
+  check: string
+  status: 'success' | 'error' | 'warning' | 'loading'
+  message: string
+  details?: string
+}
 
 export function GoogleCalendarDiagnostic() {
-  const [diagnosticResults, setDiagnosticResults] = useState<{
-    step: string
-    status: 'success' | 'error' | 'warning'
-    message: string
-  }[]>([])
+  const { user, session } = useAuth()
+  const { isConnected } = useGoogleCalendar()
+  const [results, setResults] = useState<DiagnosticResult[]>([])
+  const [isRunning, setIsRunning] = useState(false)
 
   // Obtener variables de entorno (solo públicas)
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   const currentUrl = window.location.origin
   const redirectUri = `${currentUrl}/calendar/callback`
 
+  const addResult = (result: DiagnosticResult) => {
+    setResults(prev => [...prev, result])
+  }
+
+  const updateResult = (check: string, updates: Partial<DiagnosticResult>) => {
+    setResults(prev => prev.map(result => 
+      result.check === check ? { ...result, ...updates } : result
+    ))
+  }
+
+  const runDiagnostics = async () => {
+    setIsRunning(true)
+    setResults([])
+
+    // 1. Verificar autenticación de usuario
+    addResult({
+      check: 'Autenticación del Usuario',
+      status: 'loading',
+      message: 'Verificando autenticación...'
+    })
+
+    if (!user) {
+      updateResult('Autenticación del Usuario', {
+        status: 'error',
+        message: 'Usuario no autenticado',
+        details: 'Debes estar logueado para conectar Google Calendar'
+      })
+      setIsRunning(false)
+      return
+    }
+
+    updateResult('Autenticación del Usuario', {
+      status: 'success',
+      message: `Usuario autenticado: ${user.email}`,
+      details: `ID: ${user.id}`
+    })
+
+    // 2. Verificar sesión de Supabase
+    addResult({
+      check: 'Sesión de Supabase',
+      status: 'loading',
+      message: 'Verificando sesión...'
+    })
+
+    if (!session) {
+      updateResult('Sesión de Supabase', {
+        status: 'error',
+        message: 'No hay sesión activa',
+        details: 'La sesión de Supabase no está disponible'
+      })
+    } else {
+      const isExpired = new Date(session.expires_at! * 1000) < new Date()
+      updateResult('Sesión de Supabase', {
+        status: isExpired ? 'warning' : 'success',
+        message: isExpired ? 'Sesión expirada' : 'Sesión válida',
+        details: `Expira: ${new Date(session.expires_at! * 1000).toLocaleString()}`
+      })
+    }
+
+    // 3. Verificar variables de entorno
+    addResult({
+      check: 'Variables de Entorno',
+      status: 'loading',
+      message: 'Verificando configuración...'
+    })
+
+    if (!clientId) {
+      updateResult('Variables de Entorno', {
+        status: 'error',
+        message: 'VITE_GOOGLE_CLIENT_ID no configurado',
+        details: 'Agrega esta variable a tu archivo .env'
+      })
+      setIsRunning(false)
+      return
+    }
+
+    updateResult('Variables de Entorno', {
+      status: 'success',
+      message: 'VITE_GOOGLE_CLIENT_ID configurado',
+      details: `Client ID: ${clientId.substring(0, 20)}...`
+    })
+
+    // 4. Verificar redirect URI
+    addResult({
+      check: 'Redirect URI',
+      status: 'success',
+      message: 'Configuración correcta',
+      details: redirectUri
+    })
+
+    // 5. Verificar estado de conexión actual
+    addResult({
+      check: 'Estado de Conexión',
+      status: 'loading',
+      message: 'Verificando conexión actual...'
+    })
+
+    try {
+      const { data: tokens, error } = await supabase
+        .from('google_calendar_tokens')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (error) {
+        updateResult('Estado de Conexión', {
+          status: 'error',
+          message: 'Error consultando tokens',
+          details: error.message
+        })
+      } else if (!tokens) {
+        updateResult('Estado de Conexión', {
+          status: 'warning',
+          message: 'No hay tokens de Google Calendar',
+          details: 'Google Calendar no está conectado'
+        })
+      } else {
+        const isExpired = new Date(tokens.expires_at) < new Date()
+        updateResult('Estado de Conexión', {
+          status: isExpired ? 'warning' : 'success',
+          message: isExpired ? 'Tokens expirados' : 'Tokens válidos',
+          details: `Expiran: ${new Date(tokens.expires_at).toLocaleString()}`
+        })
+      }
+    } catch (error) {
+      updateResult('Estado de Conexión', {
+        status: 'error',
+        message: 'Error verificando tokens',
+        details: error instanceof Error ? error.message : 'Error desconocido'
+      })
+    }
+
+    // 6. Verificar Edge Functions con más detalle
+    addResult({
+      check: 'Edge Functions',
+      status: 'loading',
+      message: 'Probando conectividad...'
+    })
+
+    try {
+      // Probar con una llamada simple que debería fallar pero confirmar que la función existe
+      const { error } = await supabase.functions.invoke('google-oauth', {
+        body: { test: true }
+      })
+
+      if (error) {
+        if (error.message.includes('not found') || error.message.includes('404')) {
+          updateResult('Edge Functions', {
+            status: 'error',
+            message: 'Edge Functions no desplegadas',
+            details: 'Ve a tu Dashboard de Supabase → Edge Functions para desplegarlas'
+          })
+        } else {
+          // Error esperado por datos inválidos, pero la función existe
+          updateResult('Edge Functions', {
+            status: 'success',
+            message: 'Edge Functions disponibles',
+            details: 'Las funciones están desplegadas y respondiendo'
+          })
+        }
+      } else {
+        updateResult('Edge Functions', {
+          status: 'success',
+          message: 'Edge Functions funcionando',
+          details: 'Respuesta exitosa'
+        })
+      }
+    } catch (error) {
+      updateResult('Edge Functions', {
+        status: 'error',
+        message: 'Error probando Edge Functions',
+        details: error instanceof Error ? error.message : 'Error desconocido'
+      })
+    }
+
+    // 6.5. Verificar directamente la tabla de tokens en la BD
+    addResult({
+      check: 'Tokens en Base de Datos',
+      status: 'loading',
+      message: 'Consultando directamente la BD...'
+    })
+
+    try {
+      const { data: tokens, error: tokensError } = await supabase
+        .from('google_calendar_tokens')
+        .select('*')
+        .eq('user_id', user.id)
+
+      if (tokensError) {
+        updateResult('Tokens en Base de Datos', {
+          status: 'error',
+          message: 'Error consultando tokens',
+          details: tokensError.message
+        })
+      } else if (!tokens || tokens.length === 0) {
+        updateResult('Tokens en Base de Datos', {
+          status: 'warning',
+          message: 'No hay tokens guardados',
+          details: 'Los tokens de Google Calendar no están en la base de datos'
+        })
+      } else {
+        const token = tokens[0]
+        const isExpired = new Date(token.expires_at) < new Date()
+        updateResult('Tokens en Base de Datos', {
+          status: isExpired ? 'warning' : 'success',
+          message: isExpired ? 'Tokens encontrados pero expirados' : 'Tokens válidos encontrados',
+          details: `Creado: ${new Date(token.created_at || token.expires_at).toLocaleString()}, Expira: ${new Date(token.expires_at).toLocaleString()}`
+        })
+      }
+    } catch (error) {
+      updateResult('Tokens en Base de Datos', {
+        status: 'error',
+        message: 'Error verificando tokens',
+        details: error instanceof Error ? error.message : 'Error desconocido'
+      })
+    }
+
+    // 6.6. Probar Edge Function con datos reales (si es posible)
+    addResult({
+      check: 'Prueba de Edge Function',
+      status: 'loading',
+      message: 'Probando funcionalidad de Edge Function...'
+    })
+
+    try {
+      // Intentar una llamada con parámetros válidos pero código falso
+      const testResponse = await supabase.functions.invoke('google-oauth', {
+        body: {
+          code: 'test-code-invalid',
+          userId: user.id,
+          redirectUri: redirectUri
+        }
+      })
+
+      if (testResponse.error) {
+        // Es esperado que falle por código inválido, pero nos dice si la función funciona
+        if (testResponse.error.message.includes('Failed to exchange code for tokens')) {
+          updateResult('Prueba de Edge Function', {
+            status: 'success',
+            message: 'Edge Function funcionando correctamente',
+            details: 'La función procesó la petición (falló como esperado por código inválido)'
+          })
+        } else {
+          updateResult('Prueba de Edge Function', {
+            status: 'warning',
+            message: 'Edge Function responde pero hay problemas',
+            details: testResponse.error.message
+          })
+        }
+      } else {
+        updateResult('Prueba de Edge Function', {
+          status: 'warning',
+          message: 'Respuesta inesperada',
+          details: 'La función no falló como esperado'
+        })
+      }
+    } catch (error) {
+      updateResult('Prueba de Edge Function', {
+        status: 'error',
+        message: 'Error probando Edge Function',
+        details: error instanceof Error ? error.message : 'Error desconocido'
+      })
+    }
+
+    // 7. Verificar datos preservados de OAuth
+    addResult({
+      check: 'Datos OAuth Preservados',
+      status: 'loading',
+      message: 'Verificando localStorage...'
+    })
+
+    const preserved = localStorage.getItem('lawconnect-oauth-session')
+    if (preserved) {
+      try {
+        const data = JSON.parse(preserved)
+        const age = Date.now() - data.timestamp
+        updateResult('Datos OAuth Preservados', {
+          status: age > 10 * 60 * 1000 ? 'warning' : 'success',
+          message: age > 10 * 60 * 1000 ? 'Datos expirados' : 'Datos válidos',
+          details: `Edad: ${Math.round(age / 1000 / 60)} minutos`
+        })
+      } catch {
+        updateResult('Datos OAuth Preservados', {
+          status: 'error',
+          message: 'Datos corrompidos',
+          details: 'Los datos en localStorage están corrompidos'
+        })
+      }
+    } else {
+      updateResult('Datos OAuth Preservados', {
+        status: 'warning',
+        message: 'No hay datos preservados',
+        details: 'No se encontraron datos de sesión OAuth en localStorage'
+      })
+    }
+
+    setIsRunning(false)
+  }
+
+  useEffect(() => {
+    runDiagnostics()
+  }, [user])
+
+  const getIcon = (status: DiagnosticResult['status']) => {
+    switch (status) {
+      case 'success':
+        return <CheckCircle className="h-5 w-5 text-green" />
+      case 'error':
+        return <XCircle className="h-5 w-5 text-red" />
+      case 'warning':
+        return <AlertTriangle className="h-5 w-5 text-yellow" />
+      case 'loading':
+        return <Loader2 className="h-5 w-5 text-blue animate-spin" />
+    }
+  }
+
+  const clearOAuthData = () => {
+    localStorage.removeItem('lawconnect-oauth-session')
+    runDiagnostics()
+  }
+
   // Función para copiar al portapapeles
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     alert('Copiado al portapapeles')
-  }
-
-  // Función para realizar diagnóstico completo
-  const runDiagnostic = () => {
-    const results: typeof diagnosticResults = []
-
-    // 1. Verificar Client ID (público)
-    if (!clientId) {
-      results.push({
-        step: 'Client ID (Frontend)',
-        status: 'error',
-        message: 'VITE_GOOGLE_CLIENT_ID no está definido en las variables de entorno'
-      })
-    } else if (!clientId.includes('.googleusercontent.com')) {
-      results.push({
-        step: 'Client ID (Frontend)',
-        status: 'error',
-        message: 'Client ID no tiene el formato correcto (debe terminar en .googleusercontent.com)'
-      })
-    } else {
-      results.push({
-        step: 'Client ID (Frontend)',
-        status: 'success',
-        message: 'Client ID configurado correctamente'
-      })
-    }
-
-    // 2. Verificar arquitectura segura con Supabase
-    results.push({
-      step: 'Arquitectura de Seguridad',
-      status: 'success',
-      message: 'Client Secret manejado de forma segura en Supabase Edge Functions'
-    })
-
-    // 3. Verificar URL de desarrollo
-    if (currentUrl === 'http://localhost:5174' || currentUrl === 'http://localhost:5173') {
-      results.push({
-        step: 'URL de desarrollo',
-        status: 'success',
-        message: 'URL de desarrollo correcta'
-      })
-    } else {
-      results.push({
-        step: 'URL de desarrollo',
-        status: 'warning',
-        message: `URL actual: ${currentUrl}. Asegúrate de que esté configurada en Google Cloud Console`
-      })
-    }
-
-    // 4. Verificar formato de redirect URI
-    results.push({
-      step: 'Redirect URI',
-      status: 'success',
-      message: `Redirect URI: ${redirectUri}`
-    })
-
-    // 5. Verificar Supabase Edge Functions
-    results.push({
-      step: 'Supabase Edge Functions',
-      status: 'success',
-      message: 'Edge Functions configuradas: google-oauth y google-oauth-refresh'
-    })
-
-    // 6. Verificar Supabase Secrets
-    results.push({
-      step: 'Supabase Secrets',
-      status: 'success',
-      message: 'Credenciales almacenadas de forma segura en Supabase Vault'
-    })
-
-    setDiagnosticResults(results)
-  }
-
-  // Función para probar conexión OAuth
-  const testOAuthConnection = () => {
-    if (!clientId) {
-      alert('Primero debes configurar VITE_GOOGLE_CLIENT_ID')
-      return
-    }
-
-    // Crear URL de OAuth manualmente para testing
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/calendar',
-      access_type: 'offline',
-      prompt: 'consent'
-    })
-
-    const testUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
-    
-    // Abrir en nueva ventana para testing
-    window.open(testUrl, 'oauth-test', 'width=500,height=600')
   }
 
   return (
@@ -203,11 +439,19 @@ export function GoogleCalendarDiagnostic() {
 
             {/* Acciones */}
             <div className="flex flex-wrap gap-3">
-              <Button onClick={runDiagnostic} variant="outline">
-                🔍 Ejecutar Diagnóstico
+              <Button 
+                onClick={runDiagnostics} 
+                disabled={isRunning}
+                className="gap-2"
+              >
+                {isRunning && <Loader2 className="h-4 w-4 animate-spin" />}
+                Ejecutar Diagnósticos
               </Button>
-              <Button onClick={testOAuthConnection} disabled={!clientId}>
-                🧪 Probar Conexión OAuth
+              <Button 
+                onClick={clearOAuthData}
+                variant="outline"
+              >
+                Limpiar Datos OAuth
               </Button>
               <Button variant="outline" asChild>
                 <a href="https://console.cloud.google.com/apis/credentials" target="_blank">
@@ -218,17 +462,30 @@ export function GoogleCalendarDiagnostic() {
             </div>
 
             {/* Resultados del diagnóstico */}
-            {diagnosticResults.length > 0 && (
+            {results.length > 0 && (
               <div className="space-y-3">
                 <h3 className="font-semibold">📊 Resultados del Diagnóstico:</h3>
-                {diagnosticResults.map((result, index) => (
-                  <div key={index} className="flex items-start gap-3 p-3 bg-surface1 rounded-lg">
-                    {result.status === 'success' && <CheckCircle className="h-5 w-5 text-green mt-0.5" />}
-                    {result.status === 'warning' && <AlertTriangle className="h-5 w-5 text-yellow mt-0.5" />}
-                    {result.status === 'error' && <XCircle className="h-5 w-5 text-red mt-0.5" />}
+                {results.map((result, index) => (
+                  <div 
+                    key={index}
+                    className="flex items-start gap-3 p-4 rounded-lg border border-surface1 bg-surface0"
+                  >
+                    {getIcon(result.status)}
                     <div className="flex-1">
-                      <p className="font-medium text-sm">{result.step}</p>
-                      <p className="text-xs text-subtext0">{result.message}</p>
+                      <div className="font-medium">{result.check}</div>
+                      <div className={`text-sm ${
+                        result.status === 'success' ? 'text-green' :
+                        result.status === 'error' ? 'text-red' :
+                        result.status === 'warning' ? 'text-yellow' :
+                        'text-subtext0'
+                      }`}>
+                        {result.message}
+                      </div>
+                      {result.details && (
+                        <div className="text-xs text-subtext1 mt-1 font-mono">
+                          {result.details}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

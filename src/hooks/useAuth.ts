@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
 
@@ -6,8 +6,16 @@ export function useAuth() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
+  const initializationRef = useRef(false)
 
   useEffect(() => {
+    // Evitar múltiples inicializaciones
+    if (initializationRef.current) {
+      console.log('🚫 Hook de autenticación ya está inicializado')
+      return
+    }
+    
+    initializationRef.current = true
     console.log('🔄 Inicializando hook de autenticación...')
     
     // Obtener sesión inicial
@@ -55,11 +63,12 @@ export function useAuth() {
     return () => {
       console.log('🧹 Limpiando suscripción de auth')
       subscription.unsubscribe()
+      initializationRef.current = false
     }
   }, [])
 
-  // Función para preservar sesión antes de OAuth
-  const preserveSessionForOAuth = () => {
+  // Función para preservar sesión antes de OAuth (memoizada)
+  const preserveSessionForOAuth = useCallback(() => {
     if (session) {
       console.log('💾 Preservando sesión para OAuth...')
       localStorage.setItem('lawconnect-oauth-session', JSON.stringify({
@@ -68,44 +77,58 @@ export function useAuth() {
         user_id: session.user.id,
         timestamp: Date.now()
       }))
+      return true
     }
-  }
+    console.log('⚠️ No hay sesión para preservar')
+    return false
+  }, [session])
 
-  // Función para restaurar sesión después de OAuth
-  const restoreSessionAfterOAuth = async () => {
+  // Función para restaurar sesión después de OAuth (memoizada)
+  const restoreSessionAfterOAuth = useCallback(async () => {
     const preserved = localStorage.getItem('lawconnect-oauth-session')
-    if (preserved) {
-      try {
-        const sessionData = JSON.parse(preserved)
-        const age = Date.now() - sessionData.timestamp
-        
-        // Solo restaurar si la sesión es reciente (menos de 10 minutos)
-        if (age < 10 * 60 * 1000) {
-          console.log('🔄 Restaurando sesión después de OAuth...')
-          
-          // Intentar refrescar la sesión
-          const { data, error } = await supabase.auth.setSession({
-            access_token: sessionData.access_token,
-            refresh_token: sessionData.refresh_token
-          })
-          
-          if (!error && data.session) {
-            console.log('✅ Sesión restaurada exitosamente')
-            setSession(data.session)
-            setUser(data.session.user)
-          }
-        }
-        
-        // Limpiar datos preservados
+    if (!preserved) {
+      console.log('ℹ️ No hay sesión preservada para restaurar')
+      return false
+    }
+
+    try {
+      const sessionData = JSON.parse(preserved)
+      const age = Date.now() - sessionData.timestamp
+      
+      // Solo restaurar si la sesión es reciente (menos de 10 minutos)
+      if (age > 10 * 60 * 1000) {
+        console.log('⏰ Sesión preservada ha expirado (más de 10 minutos)')
         localStorage.removeItem('lawconnect-oauth-session')
-      } catch (error) {
+        return false
+      }
+
+      console.log('🔄 Restaurando sesión después de OAuth...')
+      
+      // Intentar refrescar la sesión
+      const { data, error } = await supabase.auth.setSession({
+        access_token: sessionData.access_token,
+        refresh_token: sessionData.refresh_token
+      })
+      
+      if (!error && data.session) {
+        console.log('✅ Sesión restaurada exitosamente')
+        setSession(data.session)
+        setUser(data.session.user)
+        localStorage.removeItem('lawconnect-oauth-session')
+        return true
+      } else {
         console.error('❌ Error restaurando sesión:', error)
         localStorage.removeItem('lawconnect-oauth-session')
+        return false
       }
+    } catch (error) {
+      console.error('❌ Error parseando datos de sesión preservada:', error)
+      localStorage.removeItem('lawconnect-oauth-session')
+      return false
     }
-  }
+  }, [])
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string) => {
     console.log('🔑 Intentando iniciar sesión para:', email)
     setLoading(true)
     
@@ -128,9 +151,9 @@ export function useAuth() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const signUp = async (email: string, password: string, metadata?: any) => {
+  const signUp = useCallback(async (email: string, password: string, metadata?: any) => {
     console.log('📝 Intentando registrar usuario:', email)
     setLoading(true)
     
@@ -157,9 +180,9 @@ export function useAuth() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     console.log('👋 Cerrando sesión...')
     setLoading(true)
     
@@ -181,9 +204,9 @@ export function useAuth() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const resetPassword = async (email: string) => {
+  const resetPassword = useCallback(async (email: string) => {
     console.log('🔐 Solicitando reset de contraseña para:', email)
     
     try {
@@ -202,9 +225,9 @@ export function useAuth() {
       console.error('❌ Excepción en resetPassword:', error)
       return { error }
     }
-  }
+  }, [])
 
-  const updatePassword = async (newPassword: string) => {
+  const updatePassword = useCallback(async (newPassword: string) => {
     console.log('🔐 Actualizando contraseña...')
     
     try {
@@ -223,9 +246,9 @@ export function useAuth() {
       console.error('❌ Excepción en updatePassword:', error)
       return { error }
     }
-  }
+  }, [])
 
-  const resendConfirmation = async (email: string) => {
+  const resendConfirmation = useCallback(async (email: string) => {
     console.log('📧 Reenviando confirmación para:', email)
     
     try {
@@ -248,7 +271,7 @@ export function useAuth() {
       console.error('❌ Excepción en resendConfirmation:', error)
       return { error }
     }
-  }
+  }, [])
 
   return {
     user,

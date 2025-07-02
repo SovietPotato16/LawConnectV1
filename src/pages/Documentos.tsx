@@ -555,7 +555,7 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                         </Badge>
                       )}
                       {doc.id === 'ejemplo-documento-001' && (
-                        <Badge variant="secondary" className="text-xs bg-yellow text-base">
+                        <Badge variant="secondary" className="text-xs bg-yellow text-black">
                           Ejemplo
                         </Badge>
                       )}
